@@ -19,8 +19,8 @@ The goals are:
  (the first (-1, 1) sums have more weight than >1). This
  is not trivial with bitwise operations since squashing involves either 
  binning or many operations to create a function that meaningfully maps 32 to 
- 8 bits. This may seem trivial but this leaves consistent representation and 
- is in my current understanding a flaw in Neural Networks without 
+ 8 bits. This should create consistent representation and 
+ is in my current understanding a working flaw in Neural Networks without 
  "quantization".
 
 4. *digitization*. This representation should be low level enough that a 
