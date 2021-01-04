@@ -216,14 +216,18 @@ pub mod network {
     }
     impl<'a> Network<'a> {
         //forward propagate through the network
-        pub fn cycle() {
+        pub fn cycle(input: Vec<u8>, output: Vec<u8>) {
             //TODO: take a u8 array and return a u8 array
+            let buffer = vec![input.len()];
+            for i in input.iter(){
+            }
         }
-        pub fn add_connection(&mut self, addition: crate::connections::Connection){
-            //TODO: add a connection to self. 
+        pub fn add_connection(&mut self, addition: crate::connections::Connection) {
+            //TODO: add a connection to self.
             //NOTE: no add_node or mutation methods since this is more high level
             //      k.stanley suggests in emails topology is represented as connections
             //      and this is more space efficient.
+            //  consequently this can create hanging nodes and parallel connections.
         }
     }
 }
