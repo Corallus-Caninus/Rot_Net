@@ -1,4 +1,4 @@
-use std::vec;
+
 
 //NOTE: These are the droids you're looking for.
 //32 bit connections
@@ -204,7 +204,7 @@ pub mod activations {
     }
     //TODO: rot connection activation using XOR and possibly 2x bitshift (1 vs 2 clocks)
 }
-use crate::connections::Connection;
+
 
 pub mod network {
     pub struct Network<'a> {
@@ -216,13 +216,13 @@ pub mod network {
     }
     impl<'a> Network<'a> {
         //forward propagate through the network
-        pub fn cycle(input: Vec<u8>, output: Vec<u8>) {
+        pub fn cycle(input: Vec<u8>, _output: Vec<u8>) {
             //TODO: take a u8 array and return a u8 array
-            let buffer = vec![input.len()];
-            for i in input.iter(){
+            let _buffer = vec![input.len()];
+            for _i in input.iter(){
             }
         }
-        pub fn add_connection(&mut self, addition: crate::connections::Connection) {
+        pub fn add_connection(&mut self, _addition: crate::connections::Connection) {
             //TODO: add a connection to self.
             //NOTE: no add_node or mutation methods since this is more high level
             //      k.stanley suggests in emails topology is represented as connections

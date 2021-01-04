@@ -10,7 +10,12 @@ edition = "2018"
 name = "net"
 path = "src/lib.rs"
 
+# TODO: use rayon or create custom threading. 
+#       custom threading is likely appropriate 
+#       since this is such a low level feature 
+#       but need to scan os config for core count threading.
 [dependencies]
+log = "0.4.11"
 timeit="0.1.2"
 rand="0.7.3"
 
