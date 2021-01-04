@@ -27,6 +27,6 @@ The goals are:
  few common logic gates/circuits should be able to reproduce or transfer 
  models into an FPGA or ASIC configuration with ease.
 
-5. *energy effeciency* if you wanna be a sneek boy/girl or simply dont want to
- consume too much wattage. This network should be memory bottlenecked on all
- operations to the point parameter compression isnt off the table with certain ALUs/architectures.
+5. *energy effeciency* Low level operations should use less pipeline stages and therefore less silicon switching. 
+ This network should be memory bottlenecked on all operations to the point parameter compression isnt off the 
+ table with certain ALUs/architectures.
