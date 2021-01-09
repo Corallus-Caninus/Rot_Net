@@ -15,15 +15,23 @@ pub mod connections {
     //       (squash then activate-- activation is for network emergent approximation not squashing)
     //       this would mean the entire network is u8 and dont need 32 buffer extension which doesnt
     //       carry representation anyways without a larger activation domain.
+    // TODO: this repeats due to bit shift since 0 overflow shift implemented.
+    //       set max weight value to index precision or change otherwise.
+    //       (scrubbing (notch_rot?) has combination of data type length distinct
+    //       outputs f(x) != {f({y})} | x !e y: len(dtype)!)
+    //       can conditional inequality piecewise scrubbing. This yields a smooth function
+    //       that can be conditionally shaped to saddle points. at what condition+binop count
+    //       is mult faster (at scale, considering SMD etc)? is this faster than unsigned integer
+    //       multiplication because thats what is is unless creating a function that isnt a saddle.
+    // TODO: 16 conditions for non isotropic function(continually increasing/decreasing).
+    //       mirror 8 conditions for a saddle or smoother quadratic curve (convex)
+    // TODO: 0 shifting is unreversible (lossy). cant readily take the gradient. can do the gradient
+    //       piecewise trick like cond_rot_sigmoid
+    // NOTE: for now, multiplication is plenty fast and well optimized.
     impl<'a> Connection<'a> {
-        pub fn propagate(&self, signal: u8) -> u8 {
-            //implement with rotations and/or masking.
-            //This is the primary network bottleneck not activation (secondary).
-            if self.direction {
-                signal << self.weight
-            } else {
-                signal >> self.weight
-            }
+        pub fn forward_propagate(&self, signal: u32) -> u32 {
+            self.weight as u32 * signal
+            // TODO: pub fn backward_propagate() { } //for multiplication this is typical subtraction
         }
     }
 }
@@ -109,13 +117,11 @@ pub mod network {
         inputs: Vec<Connection<'a>>,
         outputs: Vec<Connection<'a>>,
     }
+    ///a very simple artificial neural network class.
     impl<'a> Network<'a> {
-        //forward propagate through the network
-        pub fn cycle(input: Vec<u8>, _output: Vec<u8>) {
-            //TODO: take a u8 array and return a u8 array
-            let _buffer = vec![input.len()];
-            for _i in input.iter() {}
-        }
+        /// insert a connection into this network. This is the fundamental operation and isnt
+        /// checked for nodes. This can create subtrees that dont trace to inputs or outputs
+        /// so it is expected to be wrapped and called appropriately from caller.
         pub fn add_connection(&mut self, _addition: crate::connections::Connection) {
             //TODO: add a connection to self.
             //NOTE: no add_node or mutation methods since this is more high level
@@ -123,8 +129,14 @@ pub mod network {
             //      and this is more space efficient.
             //  consequently this can create hanging nodes and parallel connections.
         }
-        pub fn forward_propagate(&mut self, inputs: Vec<u8>) -> Vec<u8> {
+        /// takes the given inputs and propagates the signals through the network,
+        /// returning the final signals at the output. every node is activated once,
+        /// creating one-pass or "per pass" recurrence. Although simple, this can
+        /// describe any unrolled neural network and also allows for res-net features.
+        pub fn cycle(&mut self, inputs: Vec<u8>) -> Vec<u8> {
+            //TODO: async threadpool layers since will need to scale very large.
             let output: Vec<u8> = vec![];
+            let buffer: Vec<u32> = vec![];
             //TODO: propagate and return
             output
         }

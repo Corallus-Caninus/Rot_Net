@@ -16,8 +16,8 @@ path = "src/lib.rs"
 #       but need to scan os config for core count threading.
 [dependencies]
 log = "0.4.11"
-timeit="0.1.2"
-rand="0.7.3"
+timeit= "0.1.2"
+rand= "0.8.1"
 
 [profile.release]
 lto = true
