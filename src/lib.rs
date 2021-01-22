@@ -14,6 +14,7 @@ pub mod connections {
         pub out_connection: Option<&'a Connection<'a>>, //8 bytes
     }
 }
+
 pub mod activations {
     //      uses 32 bit prec.
     //      hard code a limit to max connections in architecture search or implementation.
@@ -125,8 +126,8 @@ pub mod network {
         ///
         /// inputs must be positionally encoded (matched) to nodes.
         /// changing positions in the vector will skew input and destabilize trainning.
-        pub fn forward_propagate(&mut self, inputs: &mut Vec<u32>) -> Vec<u8> {
-            //TODO: assert_eq!(inputs.len(), self.inputs.len())
+        pub fn forward_propagate(&mut self, inputs: Vec<u32>) -> Vec<u8> {
+            //TODO: assert_eq!(inputs.len(), self.inputs.len()) this is slow :/
             //TODO: input can be stack array [u32; self.input.len()] ?
             //TODO: shouldnt need to borrow mutably here.
 
@@ -141,17 +142,22 @@ pub mod network {
             //      (node_cur_buffer, signal_buffer)
 
             //initializing connection and signal associated tuples with input vector
-            let mut buffer: Vec<(&Connection, u8)> = self
-                .inputs
+            let mut buffer: Vec<(&Connection, u8)> = inputs
                 .iter()
-                .map(|x| {
-                    (
-                        x, //the node in question
-                        //move in and consume input vector with squash normalization,
-                        cond_rot_act(x.weight as u32 * inputs.pop().unwrap() as u32), //it's associated signal
-                    )
-                })
+                .zip(&self.inputs)
+                .map(|(inputs, s)| (s, cond_rot_act(s.weight as u32 * *inputs as u32)))
                 .collect();
+            // let mut buffer: Vec<(&Connection, u8)> = self
+            //     .inputs
+            //     .iter()
+            //     .map(|x| {
+            //         (
+            //             x, //the node in question
+            //             //move in and consume input vector with squash normalization,
+            //             cond_rot_act(x.weight as u32 * inputs.pop().unwrap() as u32), //it's associated signal
+            //         )
+            //     })
+            //     .collect();
             print!("buffer intialized..");
 
             //loop until output vector is ready, since this isnt recurrent we are done when the buffer == self.outputs
@@ -188,14 +194,12 @@ pub mod network {
                         //collect "node" groups here so we can move by reference
                         let group: &Vec<(&Connection, u8)> = &group.collect();
 
-                        // TODO: not checking out_connections in group items
                         if group.iter().all(|g| {
                             self.connections
                                 .iter()
                                 .filter(|c| std::ptr::eq(**c as *const _, key))
                                 .any(|c| std::ptr::eq(*c as *const _, g.0.out_connection.unwrap()))
                         }) {
-                            // TODO: this dont happen
                             println!("NODE: activation routine..");
                             group
                                 .iter()
@@ -218,7 +222,6 @@ pub mod network {
                     .flatten()
                     .collect();
             }
-            //TODO: move this correctly
             let output = buffer.iter().map(|connection| connection.1 as u8).collect();
             output
         }

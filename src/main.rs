@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate timeit;
+use std::env;
 
 // TODO: run a Jenkins build pipeline or something for these unittests for DEVOPs.
 //       scale this out into application (gradient architecture search and BWAPI)
@@ -67,6 +68,13 @@ mod tests {
 fn main() {
     use net::connections::*;
     use net::network::Network;
+    env::args().for_each(|x| println!("got {}", x));
+    let mut args: Vec<String> = env::args().collect();
+    args.remove(0);
+    let args = args
+        .iter()
+        .map(|x| x.parse::<u32>().unwrap())
+        .collect();
 
     let output_connection = &Connection {
         weight: 4 as u8,
@@ -91,10 +99,13 @@ fn main() {
         inputs: input_connections,
     };
 
-    test_net.inputs.iter().for_each(|x| println!("INPUT ADDRESS: {:p}", x));
+    test_net
+        .inputs
+        .iter()
+        .for_each(|x| println!("INPUT ADDRESS: {:p}", x));
     println!("OUTPUT ADDRESS: {:p}", output_connection);
-    let answer = test_net.forward_propagate(&mut vec![11 as u32, 11 as u32]);
-    for a in answer{
+    let answer = test_net.forward_propagate(args);
+    for a in answer {
         println!("got {}", a);
     }
 }
