@@ -18,6 +18,7 @@ path = "src/lib.rs"
 log = "0.4.11"
 timeit= "0.1.2"
 rand= "0.8.1"
+itertools = "0.10.0"
 
 [profile.release]
 lto = true

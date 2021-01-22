@@ -13,9 +13,6 @@ mod tests {
     fn test_activation() {
         print!("Testing of sigmoid activation of 8 bit integer using only bitshift operations.");
         print!("target runtime is 3 clock cycles for 3 barrel shift operations.\n");
-        //TODO: graph this to csv and visualize in sheets.
-        //      write to buffer than flush to disk to time
-        //      binops wrt. virtual machine and stack machine
         for i in 1..255 {
             print!(
                 "\n sent {} and got: {} == {}",
@@ -24,6 +21,7 @@ mod tests {
                 cond_rot_act(i)
             );
         }
+        //TODO: check distance between i and i+1 to ensure no piecewise discontinuity
         print!("Testing conditional rotation activation..");
         timeit!({
             for i in 1..255 {
@@ -39,65 +37,64 @@ mod tests {
         print!("Testing multiplication..");
         timeit!({
             for i in 1..255 {
-                i*(i+1);
+                i * (i + 1);
             }
         });
     }
-    #[test]
-    fn test_connection_propagation() {
-        print!("Testing forward propagation of a connection with 8 bit shift operations");
-        let connection = Connection {
-            weight: 4 as u8,
-            direction: true,
-            in_connection: None,
-            out_connection: None,
-        };
-        for i in 1..255 {
-            let solution = connection.forward_propagate(i as u32);
-            // res = connection.propagate()
-            print!("\n sent {} and got {}", i, solution);
-        }
-    }
+    // #[test]
+    // fn test_connection_propagation() {
+    //     print!("Testing forward propagation of a connection with 8 bit shift operations");
+    //     let connection = Connection {
+    //         weight: 4 as u8,
+    //         in_connection: None,
+    //         out_connection: None,
+    //     };
+    //     for i in 1..255 {
+    //         let solution = connection.forward_propagate(i as u32);
+    //         // res = connection.propagate()
+    //         print!("\n sent {} and got {}", i, solution);
+    //     }
+    // }
     #[test]
     fn test_network_forward_propagation() {
         print!("Testing forward propagation of a network");
+        // TODO: create network and forward propagate
     }
 }
 
 //CURRENTLY TESTING WITH PRINTOUT:
 // activation.
 fn main() {
+    use net::connections::*;
+    use net::network::Network;
 
-    use net::activations::cond_rot_act;
-    print!("Testing of sigmoid activation of 8 bit integer using only bitshift operations.");
-    print!("target runtime is 3 clock cycles for 3 barrel shift operations.\n");
-    //TODO: graph this to csv and visualize in sheets.
-    //      write to buffer than flush to disk to time
-    //      binops wrt. virtual machine and stack machine
-    for i in 1..255 {
-        print!(
-            "\n sent {} and got: {} == {}",
-            i,
-            format!("{:b}", cond_rot_act(i)),
-            cond_rot_act(i)
-        );
+    let output_connection = &Connection {
+        weight: 4 as u8,
+        in_connection: None,
+        out_connection: None,
+    };
+    let input_connections = vec![
+        Connection {
+            weight: 8,
+            in_connection: None,
+            out_connection: Some(output_connection),
+        },
+        Connection {
+            weight: 4,
+            in_connection: None,
+            out_connection: Some(output_connection),
+        },
+    ];
+    // now move connections with ownership into network for RAII acquisition
+    let mut test_net = Network {
+        connections: vec![output_connection],
+        inputs: input_connections,
+    };
+
+    test_net.inputs.iter().for_each(|x| println!("INPUT ADDRESS: {:p}", x));
+    println!("OUTPUT ADDRESS: {:p}", output_connection);
+    let answer = test_net.forward_propagate(&mut vec![11 as u32, 11 as u32]);
+    for a in answer{
+        println!("got {}", a);
     }
-    print!("Testing conditional rotation activation..");
-    timeit!({
-        for i in 1..255 {
-            cond_rot_act(i);
-        }
-    });
-    print!("Testing unoptimized full 32x precision sigmoid activation..");
-    timeit!({
-        for i in 1..255 {
-            (1.0_f32 / 1.0_f32 + (-1.0_f32 * (i as f32)).exp());
-        }
-    });
-    print!("Testing multiplication..");
-    timeit!({
-        for i in 1..255 {
-            i*(i+1);
-        }
-    });
 }
