@@ -8,7 +8,6 @@
 // TODO: clean up references and clones! make space efficient before
 //       further speed optimization. unless some serious backend or
 //       frontend optimization occurs I dont see how this doesnt bloat.
-// TODO: Read source on move, copy and clone.
 pub mod rot_net {
     use activations::{cond_rot_act, cond_rot_grad};
     use itertools::Itertools;
@@ -25,8 +24,11 @@ pub mod rot_net {
     //      cast to bits and discretize/bin? want to be able to send any object and chunk/vectorize into a network.
     //      std::mem::transmute might be a good option here. some methods within serde might also be helpful.
     //     use same generic casting schema for the output harvesting.
+
     //TODO: can we center all data points on ingest to 147 and implement a psuedo 0 crossing sigmoid
-    //TODO: macro generic?
+    //      this doesnt make sense since not how its implemented in traditional neural networks or perceptrons.
+
+    //TODO: macro generic? so variable length (would also need variable type?)
     //pub mod vectorize(){
     //  pub fn inputs<T>(Vec<T>)-> Vec<u8>
     //  pub fn outputs<T>(Vec<T>)->Vec<u8>}
@@ -71,6 +73,8 @@ pub mod rot_net {
         //       than a weighted normalization and is the term of approximation. start with what works and
         //       investigate empirically.
         // TODO: shift the head over into the domain and set slopes as 2 and 4 respectively.
+        // TODO: analyse the sigmoid function to calculate the best fitting slope constrained by 5 segments.
+        //       dont just guess. simple calculus can resolve this.
         /// approximate a sigmoid inflection and concavity features with a rotate of u8's.
         /// This implementation requires normalization of the connection parameters to prevent overflow.
         pub fn cond_rot_act(x: u8) -> u8 {
@@ -81,7 +85,6 @@ pub mod rot_net {
             //    not cur_buffer precision, this may change.
             // The lines and intercepts are solved for two slopes: 1/2 and 2 given 1. and 2.
             // This approximation is the maximum precision and minimum error optimizing for speed
-
             if x < SEGMENTS[0] {
                 0
             } else if x < SEGMENTS[1] {
@@ -119,6 +122,9 @@ pub mod rot_net {
         pub params: u8, // this is up to 8 conditions per const BITCHECK make 'em count.
     }
     impl<'a> Connection<'a> {
+        //TODO: derive this
+
+        /// weight the given signal by this connection using rotations
         pub fn weight(&self, sig: u8) -> u8 {
             // I like the depth of these conditions as apposed to unrolled elif elif etc.
             // conditional branching is faster just like a tree is faster than a list
@@ -160,13 +166,6 @@ pub mod rot_net {
             } else {
                 sig //pass the signal fallthrough
             }
-        }
-
-        // TODO: UNUSED/DEPRECATED
-        /// weight this signal and return it with the edge pointed Node
-        pub fn activate(&self, sig: u8) -> (&Node<'a>, u8) {
-            let res = self.weight(sig);
-            (&self.out_node, res)
         }
     }
     #[derive(Clone)]
@@ -399,12 +398,47 @@ pub mod rot_net {
         }
 
         // IMMUTABLE OPERATIONS //
+        // TODO: extract from forward propagation.
+        pub fn activate_nodes(
+            node_assoc_connections: Vec<(&Cell<Connection<'a>>, u8)>,
+        ) -> Vec<(&'a Cell<Connection<'a>>, u8)> {
+            // TODO: could weight these as they arrive? may make more smooth computation.
+            let mut sig_sum: u16 = 0;
+            node_assoc_connections.iter().for_each(|assoc_connection| {
+                sig_sum += assoc_connection.0.get().weight(assoc_connection.1) as u16;
+                sig_sum = sig_sum >> 1;
+            });
+            // node activation and broadcast routine
+            // TODO: retain groupings so resort isnt as costly per layer with retained nodes.
+            node_assoc_connections
+                .into_iter()
+                .flat_map(|assoc_connection| {
+                    assoc_connection
+                        .0
+                        .get()
+                        .out_node
+                        .out_edges
+                        .borrow()
+                        // TODO: this is not preferable but kinda makes sense
+                        .to_owned()
+                        .into_iter()
+                        .map(|next_connection| {
+                            (next_connection, activations::cond_rot_act(sig_sum as u8))
+                        })
+                })
+                .collect()
+        }
+
         // TODO: at some point this will be matrix ops instead so keep in mind when optimizing.
+        // TODO: optimizations can occur in reducing collects and references. The later may get
+        //       backend optimized out anyways with inlining and argpromotion. (does lazy analysis make algorithms lazy with
+        //       inlining?)
         /// forward propagate.
         /// clones signals and returns the output vector.
         pub fn cycle(self, signals: Vec<u8>) -> Vec<u8> {
             // Initialize: get signals into the topology and ready the first layer
             //  1. each input node gets a signal and broadcasts
+            // TODO: filter out repeated connections
             let mut buffer = vec![];
             //initialize
             // NOTE: does not support intra-extrema connections
@@ -423,8 +457,6 @@ pub mod rot_net {
                 .collect();
             // can still short circuit here if careful due to toplogy constraints
             // (no subset of self.outputs.in_edges will ever equate the set of buffer)
-            // TODO: reduce collects to aggresively become lazy
-            // TODO: reduce pointers to be more readable. should optimize away anyways in backend
             while !buffer.iter().any(|connection| {
                 self.outputs.iter().any(|output| {
                     output
@@ -446,6 +478,7 @@ pub mod rot_net {
                     })
                     .group_by(|assoc_connection| assoc_connection.0.get().out_node as *const Node)
                     .into_iter()
+                    // TODO: would prefer not to flatten here to reduce sorting per layer for retained nodes.
                     .flat_map(|(_key, node_assoc_connections)| {
                         let node_assoc_connections =
                             node_assoc_connections.collect::<Vec<(&Cell<Connection>, u8)>>();
@@ -462,35 +495,7 @@ pub mod rot_net {
                                 })
                         }) {
                             // node normalization and sum routine
-                            // TODO: could weight these as they arrive? may make more smooth computation.
-                            let mut sig_sum: u16 = 0;
-                            node_assoc_connections.iter().for_each(|assoc_connection| {
-                                sig_sum +=
-                                    assoc_connection.0.get().weight(assoc_connection.1) as u16;
-                                sig_sum = sig_sum >> 1;
-                            });
-                            // node activation and broadcast routine
-                            // TODO: retain groupings so resort isnt as costly per layer
-                            node_assoc_connections
-                                .into_iter()
-                                .flat_map(|assoc_connection| {
-                                    assoc_connection
-                                        .0
-                                        .get()
-                                        .out_node
-                                        .out_edges
-                                        .borrow()
-                                        // TODO: this is not preferable but kinda makes sense
-                                        .to_owned()
-                                        .into_iter()
-                                        .map(|next_connection| {
-                                            (
-                                                next_connection,
-                                                activations::cond_rot_act(sig_sum as u8),
-                                            )
-                                        })
-                                })
-                                .collect()
+                            network::activate_nodes(node_assoc_connections)
                         } else {
                             //node delay routine
                             node_assoc_connections

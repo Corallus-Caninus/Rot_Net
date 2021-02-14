@@ -51,6 +51,11 @@
 
 // NOTE: look at Polly for llvm and BLAS for parallelization/SIMD optimization. prefer to get into matrix ops and call on GPU
 
+
+// TODO: generate a matrix using forward_propagation algorithm. use Vec<T> and chunksize == layersize. Can also use Vec<T> and 
+//       Vec<usize> to variable length layersize (variable stride the vec). this incurs +1 ptr per layer but is better than current +2 
+//       ptr per connections with +2 per node.
+
 // NOTE: Vecs are chunks of locality that is why capacitance exists due to the total re allocation on capacity exceeding.
 //       Loading a vec on the stack loads sequential addresses.
 // NOTE: on the cache locality of graphs: 
