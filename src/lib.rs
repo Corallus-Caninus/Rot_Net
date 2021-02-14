@@ -10,9 +10,12 @@
 //       frontend optimization occurs I dont see how this doesnt bloat.
 // TODO: Read source on move, copy and clone.
 pub mod rot_net {
-    use activations::cond_rot_act;
+    use activations::{cond_rot_act, cond_rot_grad};
     use itertools::Itertools;
+    // TODO: rng needs to be all passed in or called by reference.
+    //       need to ensure not creating too many PRNG states (what is thread_local rng)
     use rand::Rng;
+    use rand::{random, seq::IteratorRandom};
     use std::{
         borrow::BorrowMut,
         cell::{Cell, RefCell},
@@ -23,6 +26,7 @@ pub mod rot_net {
     //      std::mem::transmute might be a good option here. some methods within serde might also be helpful.
     //     use same generic casting schema for the output harvesting.
     //TODO: can we center all data points on ingest to 147 and implement a psuedo 0 crossing sigmoid
+    //TODO: macro generic?
     //pub mod vectorize(){
     //  pub fn inputs<T>(Vec<T>)-> Vec<u8>
     //  pub fn outputs<T>(Vec<T>)->Vec<u8>}
@@ -127,6 +131,8 @@ pub mod rot_net {
             //  2. n resolution (sig <</>> n)
             // TODO: can this be differentiated by retaining signals in parameters?
             //       less parameter-space efficient but just as fast forwards and backwards
+            // TODO: should this return a 16? can get more domain out of rot but I designed this as u8
+            //       so requires some further research
 
             // TODO: unittest this.
 
@@ -177,6 +183,7 @@ pub mod rot_net {
     // TODO: here and rot_net may point to different objects due to cloneing.
     //       normally id say dont compare pointers but thats a workaround for bloat-safety.
     impl<'a> Node<'a> {
+        // TODO: @DEPRECATED
         // add a connection between from this node to other.
         // pub fn add_connection(self, edge: &'a Cell<Connection<'a>>) {
         //     // edge.get().out_node.in_edges.borrow_mut().push(edge);
@@ -187,7 +194,6 @@ pub mod rot_net {
         //         .in_edges
         //         .borrow_mut()
         //         .push(edge);
-
         //     // TODO: shrink_to_fit each time if fragmented vecs cause capacity bloat
         // }
         // // // connect this node to the given node.
@@ -219,36 +225,13 @@ pub mod rot_net {
     }
     impl<'a> network<'a> {
         // MUTABLE OPERATIONS //
-        //TODO: consolidate all these methods for construction to one that is called in owning scope
-        /// create a fully connected topology with input and output
-        /// nodes and randomized connections.
-        pub fn rot_net_initialize(inputs: Vec<&'a Node<'a>>, outputs: Vec<&'a Node<'a>>) -> Self {
-            network {
-                inputs: inputs,
-                outputs: outputs,
-            }
-        }
-        /// returns the initial connections given the output nodes.
-        /// THIS IS TODO: remove
-        pub fn connect_initial_network(
-            outs: Vec<&'a Node<'a>>,
-            rng: Vec<u8>,
-        ) -> Vec<Cell<Connection>> {
-            let mut res = vec![];
-            for i in outs.iter().zip(rng) {
-                let cur = Connection {
-                    out_node: i.0,
-                    params: i.1,
-                };
-                res.push(Cell::new(cur));
-            }
-            res
-        }
-        // TODO: add connections in another function call..
-        pub fn initialize_network(
+        // INITIALIZATION ROUTINES //
+        // TODO: because I am self taught rustacean, everything is passed between these methods and the calling frame.
+        //       this is TODO: refactor to a single call and something more rust appropriate.
+        pub fn initialize_nodes(
             num_inputs: i64,
             num_outputs: i64,
-            connections: Vec<&'a Cell<Connection<'a>>>,
+            // connections: Vec<&'a Cell<Connection<'a>>>,
         ) -> (Vec<Node<'a>>, Vec<Node<'a>>) {
             // TODO: add Connections
             let mut inputs = vec![];
@@ -269,169 +252,255 @@ pub mod rot_net {
                 };
                 outputs.push(next_node);
             }
-            inputs.iter().zip(connections.iter()).for_each(|ins| {
-                ins.0.out_edges.borrow_mut().push(ins.1);
-            });
-            outputs
-                .iter()
-                .zip(connections.into_iter())
-                .for_each(|outs| outs.0.in_edges.borrow_mut().push(outs.1));
             (inputs, outputs)
         }
-        pub fn add_random_connection(self) {}
-        pub fn add_random_node(self) {}
-        // IMMUTABLE OPERATIONS //
-        // TODO: at some point this will be matrix ops instead
-        // TODO: ENSURE CLONE USES COPY FOR OWNED CONNECTIONS
-        /// forward propagate.
-        /// consumes signals and returns the output vector.
-        pub fn cycle(self, mut signals: Vec<u8>) -> Vec<u8> {
-            //buffer contains the current node layer in_connections.
-            //each iteration sum squashes and broadcasts returning
-            //the resultant broadcast connection-signal tuples
+        /// returns initial connections given initial output nodes.
+        pub fn initialize_connections(
+            ins: Vec<&'a Node<'a>>,
+            outs: Vec<&'a Node<'a>>,
+            rng: Vec<u8>,
+        ) -> Vec<Cell<Connection<'a>>> {
+            // TODO: pass in generic rand for weighting here.
+            // TODO: not fully connected in current implementation!
+            //      this needs to iter on inputs and map to outputs then reassociate in initializer.
+            //      order doesnt matter because random params anyways just need set magnitude
+            //      equivalence per output
+            let mut res = vec![];
+            for _j in 0..ins.len() {
+                // TODO: this that rust move stuff i dont like.. why clone..
+                for i in outs.iter().zip(rng.clone()) {
+                    let cur = Connection {
+                        out_node: *i.0,
+                        params: i.1,
+                    };
+                    res.push(Cell::new(cur));
+                }
+            }
+            res
+        }
+        /// create a fully connected topology with input and output
+        /// nodes and randomized connections.
+        pub fn rot_net_initialize(
+            //TODO: if we create struct layer(Vec<&'a Node<'a>>) we
+            //      can impl iterator for random walk etc.
+            inputs: Vec<&'a Node<'a>>,
+            outputs: Vec<&'a Node<'a>>,
+            mut connections: Vec<&'a Cell<Connection<'a>>>,
+        ) -> Self {
+            let res = network {
+                inputs: inputs,
+                outputs: outputs,
+            };
+            // NOTE: these have to line up positionally until all constructor
+            //       routines are consolidated into 1
+            for input in res.inputs.iter() {
+                for output in res.outputs.iter() {
+                    //hillbilly X-Mas assertion
+                    let cur_connection = connections.pop().unwrap();
+                    input.out_edges.borrow_mut().push(cur_connection);
+                    output.in_edges.borrow_mut().push(cur_connection);
+                }
+            }
+            res
+        }
+        // COMPLEXIFYING ROUTINES //
+        // TODO: how much of this should be extracted to vs how much should be called from Psyclones
 
-            // TODO: verify not comparing Cell<Connection> but Connection
-            // Initialize: get signals into the topology and ready the first layer
-            //  1. each input node gets a signal and broadcasts
-            let mut buffer: Vec<(u8, Connection)> = self
-                // initialize
+        /// random walk this network for a Node
+        /// rng should be no larger than the network otherwise the network will
+        /// be walked repeatedly until rng is reached, not bad just sub-optimal and TODO.
+        /// NOTE: this cannot connect input and output nodes (intra extrema connections)
+        pub fn random_walk<R: Rng>(&self, rng: &'a mut R) -> &'a Node {
+            let mut buffer = vec![];
+            // TODO:  this walk should be an impl Iter for network
+            //          iter().choose() but iters are strange..
+            buffer = self
                 .inputs
                 .iter()
-                // TODO: is this to_owned pointer safe?
-                .map(|x| x.out_edges.borrow().to_owned())
-                .flatten()
-                // initial input weighting routine: //
-                .group_by(|x| x.get().out_node as *const _)
-                .into_iter()
-                .map(|(_key, group)| {
-                    group
-                        .into_iter()
-                        .map(|x| {
-                            // hillbilly len assertion:
-                            let cur_signal = signals.pop().unwrap();
-                            (x.get().weight(cur_signal), x.get().out_node)
-                        })
-                        .collect::<Vec<(u8, &Node)>>()
-                })
-                .flatten()
-                // sum-squash-activation routine: //
-                .group_by(|x| x.1 as *const _)
-                .into_iter()
-                .map(|(_key, group)| {
-                    // TODO: can this be done without mutables?
-                    // TODO: make this lazy without for_each? Cant this be threaded?
-                    let mut proc_sig = 0 as u16; // twice precision for best fit of worst case 255+255
-                    let mut node_buffer: Option<&Node> = None;
-                    group.into_iter().for_each(|x| {
-                        // this is now normalized.
-                        proc_sig += x.0 as u16;
-                        proc_sig = proc_sig >> 1;
-                        // TODO: FIX THIS x.1 is the same throughout because it got grouped.
-                        //       how is there not a better way to key by object reference??
-                        node_buffer = Some(x.1);
-                    });
-                    (
-                        activations::cond_rot_act(proc_sig as u8),
-                        node_buffer.unwrap(),
-                    )
-                })
-                .map(|x| {
-                    // TODO: this dereference so something should be into_iter close above
-                    // Broadcast routine: //
-                    x.1.out_edges
+                .flat_map(|x| {
+                    x.out_edges
                         .borrow()
-                        .iter()
-                        .map(|e| (x.0, e.get()))
-                        .collect::<Vec<(u8, Connection)>>()
+                        .to_owned()
+                        .into_iter()
+                        .map(|y| y.get().out_node)
                 })
-                .flatten()
-                // TODO: this should all be able to be lazy
                 .collect();
-
-            println!("INITIALIZATION COMPLETE");
-
-            // Propagate: forward propagate hidden layers //
-            // TODO: this short circuits but is still a little wonky
-            while buffer
-                .iter()
-                .map(|x| x.1.out_node)
-                .all(|x| self.outputs.iter().any(|y| std::ptr::eq(*y, x)))
-            {
-                println!("IN THE LOOP");
-                // TODO: REFACTOR. this is mainly copy pasta from initialization routine
+            for _i in 0..rng.gen::<usize>() {
                 buffer = buffer
                     .iter()
-                    // weight the connections using buffer signals
-                    .map(|x| (x.1.weight(x.0), x.1))
-                    .group_by(|x| x.1.out_node as *const _)
+                    .flat_map(|x| {
+                        x.out_edges
+                            .borrow()
+                            .to_owned()
+                            .into_iter()
+                            .map(|y| y.get().out_node)
+                    })
+                    .collect();
+                if buffer.len() == 0 {
+                    buffer = self
+                        .inputs
+                        .iter()
+                        .flat_map(|x| {
+                            x.out_edges
+                                .borrow()
+                                .to_owned()
+                                .into_iter()
+                                .map(|y| y.get().out_node)
+                        })
+                        .collect();
+                }
+            }
+            buffer.iter().choose(rng).unwrap()
+        }
+        /// return a connection set between random nodes
+        pub fn random_connection_nodes<R: Rng>(
+            &'a self,
+            first_rng: &'a mut R,
+            second_rng: &'a mut R,
+            third_rng: &'a mut R,
+        ) -> (&Node, &Node) {
+            // TODO: remove all these mutable references to an Rng..
+            let first_node = self.random_walk(first_rng);
+            let second_node = self.random_walk(second_rng);
+            // TODO: from calling scope..
+            // TODO: ensure this isnt an intra extrema connection. need
+            //       to analyse topology to see if this is possible.
+            let res = Cell::new(Connection {
+                out_node: first_node,
+                params: third_rng.gen(),
+            });
+            (first_node, second_node)
+        }
+        /// add a connection between two random nodes
+        /// first and second rng should point to the same Rng object?
+        /// NOTE: doesn't currently support connections between outputs and inputs or
+        /// across extrema nodes (input->input and output->output)
+        pub fn add_connection(
+            self,
+            new_connection: &'a Cell<Connection<'a>>,
+            in_node: &'a Node<'a>,
+            out_node: &'a Node<'a>,
+        ) {
+            in_node.out_edges.borrow_mut().push(new_connection);
+            out_node.in_edges.borrow_mut().push(new_connection);
+        }
+
+        // TODO: this should be wrapped so a connection is the signature.
+        //       may need to be written in implementing class
+        /// add a node to this network by splitting a connection
+        pub fn add_random_split_node<R: Rng>(
+            self,
+            in_node: &'a Node<'a>,
+            in_connection: &'a Cell<Connection<'a>>,
+            out_connection: &'a Cell<Connection<'a>>,
+        ) {
+            in_node.out_edges.borrow_mut().push(in_connection);
+            in_node.out_edges.borrow_mut().push(out_connection);
+        }
+
+        // IMMUTABLE OPERATIONS //
+        // TODO: at some point this will be matrix ops instead so keep in mind when optimizing.
+        /// forward propagate.
+        /// clones signals and returns the output vector.
+        pub fn cycle(self, signals: Vec<u8>) -> Vec<u8> {
+            // Initialize: get signals into the topology and ready the first layer
+            //  1. each input node gets a signal and broadcasts
+            let mut buffer = vec![];
+            //initialize
+            // NOTE: does not support intra-extrema connections
+            //       (input->input output->input etc. except init topology input->output)
+            buffer = self
+                .inputs
+                .iter()
+                .flat_map(|input| {
+                    input
+                        .out_edges
+                        .borrow()
+                        .to_owned()
+                        .into_iter()
+                        .zip(signals.clone().into_iter())
+                })
+                .collect();
+            // can still short circuit here if careful due to toplogy constraints
+            // (no subset of self.outputs.in_edges will ever equate the set of buffer)
+            // TODO: reduce collects to aggresively become lazy
+            // TODO: reduce pointers to be more readable. should optimize away anyways in backend
+            while !buffer.iter().any(|connection| {
+                self.outputs.iter().any(|output| {
+                    output
+                        .in_edges
+                        .borrow()
+                        .iter()
+                        .any(|final_edge| std::ptr::eq(*final_edge, connection.0))
+                })
+            }) {
+                //iterate a layer of propagation, retaining nodes that dont have all signals yet.
+                // NOTE: this is useful for
+                //      1. matrix multiplication tensor generation.
+                //      2. recurrent connections only require a small change to node retention condition
+                //         and a carry-over signal parameter.
+                buffer = buffer
                     .into_iter()
-                    // TODO: refactor this functionally as node activation
-                    // TODO: delay node condition
-                    .map(|(_key, group)| {
-                        // TODO: can this be done without mutables like this?
-                        // TODO: make this lazy without for_each? Cant this be threaded?
-                        // dont like collecting like this but until Node can implement PartialEq or can group by object reference..
-                        let g = group.collect::<Vec<(u8, Connection)>>();
-                        // reference for comparator and pass by value for carry operation
-                        if g.iter().all(|x| {
-                            x.1.out_node
+                    .sorted_by_key(|assoc_connection| {
+                        assoc_connection.0.get().out_node as *const Node
+                    })
+                    .group_by(|assoc_connection| assoc_connection.0.get().out_node as *const Node)
+                    .into_iter()
+                    .flat_map(|(_key, node_assoc_connections)| {
+                        let node_assoc_connections =
+                            node_assoc_connections.collect::<Vec<(&Cell<Connection>, u8)>>();
+                        if node_assoc_connections.iter().any(|assoc_connection| {
+                            assoc_connection
+                                .0
+                                .get()
+                                .out_node
                                 .in_edges
                                 .borrow()
                                 .iter()
-                                .any(|y| std::ptr::eq(&x.1, &y.get()))
+                                .any(|ready_connection| {
+                                    std::ptr::eq(*ready_connection, assoc_connection.0)
+                                })
                         }) {
-                            // Node Activation and Broadcast routines: //
-                            let mut proc_sig = 0 as u16; // twice precision for best fit of worst case 255+255
-                            let mut node_buffer: Option<&Node> = None;
-                            g.into_iter().for_each(|x| {
-                                // this is now normalized.
-                                proc_sig += x.0 as u16;
-                                proc_sig = proc_sig >> 1;
-                                // TODO: FIX THIS x.1 is the same throughout because it got grouped.
-                                //       how is there not a better way to key by object reference??
-                                node_buffer = Some(x.1.out_node);
+                            // node normalization and sum routine
+                            // TODO: could weight these as they arrive? may make more smooth computation.
+                            let mut sig_sum: u16 = 0;
+                            node_assoc_connections.iter().for_each(|assoc_connection| {
+                                sig_sum +=
+                                    assoc_connection.0.get().weight(assoc_connection.1) as u16;
+                                sig_sum = sig_sum >> 1;
                             });
-                            let proc_sig = activations::cond_rot_act(proc_sig as u8);
-                            // TODO: get to keys this only works as unsafe raw deref
-                            // TODO: broadcast here instead
-                            node_buffer
-                                .unwrap()
-                                .out_edges
-                                .borrow()
-                                .iter()
-                                .map(|x| (proc_sig, x.get()))
-                                .collect::<Vec<(u8, Connection)>>()
+                            // node activation and broadcast routine
+                            // TODO: retain groupings so resort isnt as costly per layer
+                            node_assoc_connections
+                                .into_iter()
+                                .flat_map(|assoc_connection| {
+                                    assoc_connection
+                                        .0
+                                        .get()
+                                        .out_node
+                                        .out_edges
+                                        .borrow()
+                                        // TODO: this is not preferable but kinda makes sense
+                                        .to_owned()
+                                        .into_iter()
+                                        .map(|next_connection| {
+                                            (
+                                                next_connection,
+                                                activations::cond_rot_act(sig_sum as u8),
+                                            )
+                                        })
+                                })
+                                .collect()
                         } else {
-                            // Node delay routine: //
-                            g.iter()
-                                .map(|x| (x.0, x.1))
-                                .collect::<Vec<(u8, Connection)>>()
+                            //node delay routine
+                            node_assoc_connections
                         }
                     })
-                    .flatten()
-                    .collect::<Vec<(u8, Connection)>>();
+                    .collect();
             }
-            // TODO: collect output signals.
-            buffer
-                .iter()
-                .group_by(|x| x.1.out_node as *const _)
-                .into_iter()
-                .map(|(_key, group)| {
-                    // all signals must be ready so sum squash unconditionally.
-                    group
-                        .into_iter()
-                        .map(|x| x.0)
-                        .fold(0, |sum, x| sum + x as u16 >> 1)
-                })
-                .map(|x| activations::cond_rot_act(x as u8))
-                .collect::<Vec<u8>>()
 
-            // //TODO: REFACTOR EXTRACT THESE ROUTINES
-            // 1. weighted,
-            // 2. grouped by node,
-            // 3. sum-normalized,
-            // 4. activated,
-            // 5. broadcast to next connections and returned as a (signal:u8,Connection)
+            // TODO: activate one more time should extract operation first
+            return buffer.iter().map(|x| x.1).collect();
         }
     }
 }

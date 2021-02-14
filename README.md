@@ -31,3 +31,6 @@ The goals are:
 5. *energy effeciency* Low level operations should use less pipeline stages and therefore less silicon switching. 
  This network should be memory bottlenecked on all operations to the point parameter compression isnt off the 
  table with certain ALUs/architectures that have pipelines that are partially idling.
+
+
+config contains the rustc and llvm params for this build.

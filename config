@@ -1,0 +1,5 @@
+[build]
+rustflags=["-Copt-level=3", "-Clto=fat", "-Cembed-bitcode=yes", "-Ccode-model=small", "-Crelocation-model=static", "-Ccodegen-units=1", "-Cllvm-args=-inline-threshold=999999999 -vectorize-slp", "--emit=asm", "-Cpasses=aa-eval basic-aa count-aa da  domfrontier domtree instcount intervals iv-users lazy-values libcall-aa lint loops memdep regions scalar-evolution scev-aa targetdata  mergefunc inline simplifycfg loops loop-deletion loop-unroll loop-unroll-and-jam loop-unswitch lower-switch loop-rotate licm reassociate indvars jump-threading loop-simplify lcssa licm argpromotion memdep memcpyopt mem2reg inline bb-vectorize dce deadargelim deadtypeelim die dse globaldce gvn loops loop-deletion loop-unroll loop-unroll-and-jam loop-unswitch lower-switch loop-rotate sink inline inline inline inline inline inline inline"]
+#-C llvm-args=-vectorize-slp-aggressive
+[term]
+verbose=true

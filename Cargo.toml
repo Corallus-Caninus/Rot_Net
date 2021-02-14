@@ -16,7 +16,7 @@ path = "src/lib.rs"
 #       but need to scan os config for core count threading.
 [dependencies]
 #log = "0.4.14"
-#timeit= "0.1.2"
+timeit= "0.1.2"
 rand= "0.8.3"
 itertools = "0.10.0"
 #mersenne_twister = "1.1.1"
@@ -28,8 +28,14 @@ itertools = "0.10.0"
 #       tenserflows static optimization mystery sauce. ropi-rwpi may be good for net ops.
 #TODO: multi pass llvm optimizations
 
-# BUILT WITH: 
 #[build]
+#lto="fat"
+#code-model="small"
+#inline-threshold=9999999
+#opt-level=3
+#codegen-units=1
+
+# BUILT WITH: 
 # NOTE: dont need repetitive inlines..
 #rustflags=["-Copt-level=3", "-Clto=fat", "-Cembed-bitcode=yes", "-Ccode-model=small", "-Crelocation-model=static", "-Ccodegen-units=1", "-Cllvm-args=-inline-threshold=999999999", "--emit=asm", "-Cpasses=aa-eval basic-aa count-aa da  domfrontier domtree instcount intervals iv-users lazy-values libcall-aa lint loops memdep regions scalar-evolution scev-aa targetdata  mergefunc inline simplifycfg loops loop-deletion loop-unroll loop-unroll-and-jam loop-unswitch lower-switch loop-rotate licm reassociate indvars jump-threading loop-simplify lcssa licm argpromotion memdep memcpyopt mem2reg inline bb-vectorize dce deadargelim deadtypeelim die dse globaldce gvn loops loop-deletion loop-unroll loop-unroll-and-jam loop-unswitch lower-switch loop-rotate sink inline inline inline inline inline inline inline"]
 #[term]
