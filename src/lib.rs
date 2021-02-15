@@ -20,13 +20,18 @@ pub mod rot_net {
         cell::{Cell, RefCell},
     };
 
-    //TODO: use generics to ingest any data type and automatically vectorize larger precision types/classes into self.inputs
-    //      cast to bits and discretize/bin? want to be able to send any object and chunk/vectorize into a network.
-    //      std::mem::transmute might be a good option here. some methods within serde might also be helpful.
+    //TODO: use generics to ingest any data type and automatically vectorize
+    //      larger precision types/classes into self.inputs
+    //      cast to bits and discretize/bin? want to be able to send any object and
+    //      chunk/vectorize into a network.
+    //      std::mem::transmute might be a good option here. some methods within serde
+    //      might also be helpful.
     //     use same generic casting schema for the output harvesting.
 
-    //TODO: can we center all data points on ingest to 147 and implement a psuedo 0 crossing sigmoid
-    //      this doesnt make sense since not how its implemented in traditional neural networks or perceptrons.
+    //TODO: can we center all data points on ingest to 147 and implement a psuedo
+    //      0 crossing sigmoid
+    //      this doesnt make sense since not how its implemented in traditional
+    //      neural networks or perceptrons.
 
     //TODO: macro generic? so variable length (would also need variable type?)
     //pub mod vectorize(){
@@ -34,7 +39,8 @@ pub mod rot_net {
     //  pub fn outputs<T>(Vec<T>)->Vec<u8>}
 
     pub mod activations {
-        //      hard code a limit to max connection in architecture search or implementation.
+        //      hard code a limit to max connection in architecture search or 
+        //      implementation.
         //      size node edges based on address size of edges (l1 cache-line trick)
 
         /// returns the derivative function's output for cond_rot_act
@@ -69,22 +75,27 @@ pub mod rot_net {
         }
 
         // TODO: how important is sigmoid for normalized sum? are such features valuable in
-        //       weight space (mutate piecewise without LUT)? relu and other acti funcs show that its more
-        //       than a weighted normalization and is the term of approximation. start with what works and
-        //       investigate empirically.
+        //       weight space (mutate piecewise without LUT)? relu and other acti funcs 
+        //       show that its more
+        //       than a weighted normalization and is the term of approximation. start 
+        //       with what works and investigate empirically.
         // TODO: shift the head over into the domain and set slopes as 2 and 4 respectively.
-        // TODO: analyse the sigmoid function to calculate the best fitting slope constrained by 5 segments.
-        //       dont just guess. simple calculus can resolve this.
-        /// approximate a sigmoid inflection and concavity features with a rotate of u8's.
-        /// This implementation requires normalization of the connection parameters to prevent overflow.
+        // TODO: analyse the sigmoid function to calculate the best fitting slope 
+        //       constrained by 5 segments.
+        //       dont just guess. simple calculus and linear regression can resolve this.
+        /// Approximate a sigmoid functions inflection and concavity features with 
+        /// byte shifting and mask offsetting.
+        /// This implementation requires normalization of the connection parameters to 
+        /// prevent overflow.
         pub fn cond_rot_act(x: u8) -> u8 {
             const SEGMENTS: [u8; 5] = [30, 75, 128, 170, 255];
             //SEGMENTATION DESCRIPTION:
             // 1. tail of sigmoid is somewhat arbitrarily set @ 30 which is 10% of domain.
-            // 2. head of sigmoid is clipped at 255, NOTE: sigmoid spans parameter precision
-            //    not cur_buffer precision, this may change.
-            // The lines and intercepts are solved for two slopes: 1/2 and 2 given 1. and 2.
-            // This approximation is the maximum precision and minimum error optimizing for speed
+            // 2. head of sigmoid is clipped at 255, NOTE: sigmoid spans parameter 
+            //    precision not cur_buffer precision, this may change.
+            // The lines and intercepts are solved for two slopes: 1/2 and 2 given 1. 
+            // and 2. This approximation is the maximum precision and minimum error 
+            // optimizing for speed.
             if x < SEGMENTS[0] {
                 0
             } else if x < SEGMENTS[1] {
@@ -112,39 +123,46 @@ pub mod rot_net {
         //
         // TODO: byte this out dont use booleans each is a byte of bloat.
         // TODO: bitmask this piece.. what is the space-time tradeoff here?
-        // NOTE: can increase statics to have 9! conditions only scales static comparators in weight
-        //       this allows for all sorts of function approximations.
+        // NOTE: can increase statics to have 9! conditions only scales static 
+        //       comparators in weight this allows for all sorts of function 
+        //       approximations.
         // 0b1000000 => direction * or /
         // 0b0100000 => one shift * or / 2
         // 0b0010000 => two shift *or / 4
         //
-        // TODO: may need to cell here so immutable with multiple node references (in and out)
+        // TODO: may need to cell here so immutable with multiple node references 
+        //       (in and out)
         pub params: u8, // this is up to 8 conditions per const BITCHECK make 'em count.
     }
     impl<'a> Connection<'a> {
         //TODO: derive this
 
-        /// weight the given signal by this connection using rotations
+        /// weight the given signal by this connection's params using rotations.
         pub fn weight(&self, sig: u8) -> u8 {
             // I like the depth of these conditions as apposed to unrolled elif elif etc.
             // conditional branching is faster just like a tree is faster than a list
             // and *should* have better branch prediction given posterior indirection.
-            // TODO: functionally declare this with prototyped levels of conditions and rotations
-            //       using traits if such resolution shows promise: impl weight for Connection{}
+            // TODO: functionally declare this with prototyped levels of conditions 
+            //       and rotations
+            //       using traits if such resolution shows promise: impl weight for 
+            //       Connection{}
             //       declare this in psyclone/implementation and virtualize here?
             //  IMPLEMENTATIONS:
-            //  1. notch_rot // is slow. has alot of expressivity but there are better ways to bit approx functions.
+            //  1. notch_rot // is slow. has alot of expressivity but there are better 
+            //     ways to bit approx functions.
             //  2. n resolution (sig <</>> n)
             // TODO: can this be differentiated by retaining signals in parameters?
             //       less parameter-space efficient but just as fast forwards and backwards
-            // TODO: should this return a 16? can get more domain out of rot but I designed this as u8
+            // TODO: should this return a 16? can get more domain out of rot but I 
+            //       designed this as u8
             //       so requires some further research
 
             // TODO: unittest this.
 
-            // notch out a bitflag compare. currently 2 ops and a cmp (3 ops) can XOR bitmasking make this faster?
-            // can 11111111 && self.params ^ 11111011 == 0b00000100 but this is still 3 ops and scaling statics
-            // once
+            // notch out a bitflag compare. currently 2 ops and a cmp (3 ops) can XOR 
+            // bitmasking make this faster?
+            // can 11111111 && self.params ^ 11111011 == 0b00000100 but this is still 3 
+            // ops and scaling statics once.
             const BITCHECK: u8 = 0b10000000;
             //single rotation
             if self.params >> 1 << 7 == BITCHECK {
@@ -181,43 +199,9 @@ pub mod rot_net {
     }
     // TODO: here and rot_net may point to different objects due to cloneing.
     //       normally id say dont compare pointers but thats a workaround for bloat-safety.
-    impl<'a> Node<'a> {
-        // TODO: @DEPRECATED
-        // add a connection between from this node to other.
-        // pub fn add_connection(self, edge: &'a Cell<Connection<'a>>) {
-        //     // edge.get().out_node.in_edges.borrow_mut().push(edge);
-        //     // self.out_edges.borrow_mut().push(edge);
-        //     self.out_edges.borrow_mut().push(edge);
-        //     edge.get()
-        //         .out_node
-        //         .in_edges
-        //         .borrow_mut()
-        //         .push(edge);
-        //     // TODO: shrink_to_fit each time if fragmented vecs cause capacity bloat
-        // }
-        // // // connect this node to the given node.
-        // // // TODO: this cant be mutable.. nodes are immutably pointed to!!
-        // pub fn add_node(self, out_node: &'a Node<'a>, new_connection: &'a Cell<Connection<'a>>) {
-        //     // TODO: since this copies do we bloat memory in parameters?
-
-        //     self.out_edges.borrow_mut().push(new_connection);
-        //     out_node
-        //         .in_edges
-        //         .borrow_mut()
-        //         .push(new_connection);
-        //     // TODO: simplified test results show this is fine but verify that these are truly
-        //     //       pointing to the correct places.
-
-        //     // TODO: shrink_to_fit each time if fragmented vecs cause capacity bloat
-        //     //       literally random so I doubt capacity will have any intuition in global allocator.
-        //     //       may be useful if using gradient based architecture search..
-        // }
-    }
+    impl<'a> Node<'a> {}
     #[derive(Clone)]
     pub struct network<'a> {
-        // NOTE: if confused about this and construction here and
-        //       in node/connection review ownership vs borrow-checker
-        // nodes: Vec<Node<'a>>,
         // these are handles into and out of the network
         inputs: Vec<&'a Node<'a>>,
         outputs: Vec<&'a Node<'a>>,
@@ -225,14 +209,19 @@ pub mod rot_net {
     impl<'a> network<'a> {
         // MUTABLE OPERATIONS //
         // INITIALIZATION ROUTINES //
-        // TODO: because I am self taught rustacean, everything is passed between these methods and the calling frame.
-        //       this is TODO: refactor to a single call and something more rust appropriate.
+        // TODO: because I am self taught rustacean, everything is passed
+        //       between these methods and
+        //       the calling frame.
+        //       this is TODO: refactor to a single call and something more
+        //       rust appropriate.
+        // TODO: there is no reason this should be all called from the owning scope.
+        //       this is a misunderstanding of ownership, borrow checking and possibly
+        //       lifetimes.
+        // TODO: all construction methods should use passed in Rng
         pub fn initialize_nodes(
             num_inputs: i64,
             num_outputs: i64,
-            // connections: Vec<&'a Cell<Connection<'a>>>,
         ) -> (Vec<Node<'a>>, Vec<Node<'a>>) {
-            // TODO: add Connections
             let mut inputs = vec![];
             let mut outputs = vec![];
             for _i in 0..num_inputs {
@@ -257,13 +246,15 @@ pub mod rot_net {
         pub fn initialize_connections(
             ins: Vec<&'a Node<'a>>,
             outs: Vec<&'a Node<'a>>,
+            //TODO: extension trait this with Rng type
             rng: Vec<u8>,
         ) -> Vec<Cell<Connection<'a>>> {
             // TODO: pass in generic rand for weighting here.
             // TODO: not fully connected in current implementation!
-            //      this needs to iter on inputs and map to outputs then reassociate in initializer.
-            //      order doesnt matter because random params anyways just need set magnitude
-            //      equivalence per output
+            //      this needs to iter on inputs and map to outputs then reassociate
+            //      in initializer.
+            //      order doesnt matter because random params anyways just need set
+            //      magnitude equivalence per output.
             let mut res = vec![];
             for _j in 0..ins.len() {
                 // TODO: this that rust move stuff i dont like.. why clone..
@@ -303,16 +294,17 @@ pub mod rot_net {
             res
         }
         // COMPLEXIFYING ROUTINES //
-        // TODO: how much of this should be extracted to vs how much should be called from Psyclones
+        // TODO: how much of this should be extracted to vs how much should be
+        //       called from Psyclones
 
+        // TODO: this cannot connect input and output nodes (intra extrema connections)
         /// random walk this network for a Node
         /// rng should be no larger than the network otherwise the network will
         /// be walked repeatedly until rng is reached, not bad just sub-optimal and TODO.
-        /// NOTE: this cannot connect input and output nodes (intra extrema connections)
-        pub fn random_walk<R: Rng>(&self, rng: &'a mut R) -> &'a Node {
+        pub fn random_walk<R: Rng+?Sized>(&self, rng: &'a mut R) -> &'a Node {
             let mut buffer = vec![];
             // TODO:  this walk should be an impl Iter for network
-            //          iter().choose() but iters are strange..
+            //          iter().choose() requires: impl iter for layer{}
             buffer = self
                 .inputs
                 .iter()
@@ -351,22 +343,20 @@ pub mod rot_net {
             }
             buffer.iter().choose(rng).unwrap()
         }
-        /// return a connection set between random nodes
-        pub fn random_connection_nodes<R: Rng>(
+
+        /// return a connection set between random nodes.
+        pub fn random_connection_nodes<R: Rng+?Sized>(
             &'a self,
-            first_rng: &'a mut R,
-            second_rng: &'a mut R,
-            third_rng: &'a mut R,
+           rng: &'a mut R,
         ) -> (&Node, &Node) {
-            // TODO: remove all these mutable references to an Rng..
-            let first_node = self.random_walk(first_rng);
-            let second_node = self.random_walk(second_rng);
+            let first_node = self.random_walk(rng);
+            let second_node = self.random_walk(rng);
             // TODO: from calling scope..
             // TODO: ensure this isnt an intra extrema connection. need
             //       to analyse topology to see if this is possible.
             let res = Cell::new(Connection {
                 out_node: first_node,
-                params: third_rng.gen(),
+                params: rng.gen(),
             });
             (first_node, second_node)
         }
@@ -398,7 +388,9 @@ pub mod rot_net {
         }
 
         // IMMUTABLE OPERATIONS //
-        // TODO: extract from forward propagation.
+        /// Activate this node by summing, normalizing and activating this connection then
+        /// broadcasting the result to the nodes out_edges and finally returning the associated
+        /// connection-signal tuples.
         pub fn activate_nodes(
             node_assoc_connections: Vec<(&Cell<Connection<'a>>, u8)>,
         ) -> Vec<(&'a Cell<Connection<'a>>, u8)> {
@@ -431,9 +423,10 @@ pub mod rot_net {
 
         // TODO: at some point this will be matrix ops instead so keep in mind when optimizing.
         // TODO: optimizations can occur in reducing collects and references. The later may get
-        //       backend optimized out anyways with inlining and argpromotion. (does lazy analysis make algorithms lazy with
+        //       backend optimized out anyways with inlining and argpromotion.
+        //       (does lazy analysis make algorithms lazy with
         //       inlining?)
-        /// forward propagate.
+        /// forward propagate this rot_net.
         /// clones signals and returns the output vector.
         pub fn cycle(self, signals: Vec<u8>) -> Vec<u8> {
             // Initialize: get signals into the topology and ready the first layer
@@ -466,10 +459,12 @@ pub mod rot_net {
                         .any(|final_edge| std::ptr::eq(*final_edge, connection.0))
                 })
             }) {
-                //iterate a layer of propagation, retaining nodes that dont have all signals yet.
+                //iterate a layer of propagation, retaining nodes that dont have all
+                //signals yet.
                 // NOTE: this is useful for
                 //      1. matrix multiplication tensor generation.
-                //      2. recurrent connections only require a small change to node retention condition
+                //      2. recurrent connections only require a small change to node
+                //         retention condition
                 //         and a carry-over signal parameter.
                 buffer = buffer
                     .into_iter()
@@ -478,7 +473,8 @@ pub mod rot_net {
                     })
                     .group_by(|assoc_connection| assoc_connection.0.get().out_node as *const Node)
                     .into_iter()
-                    // TODO: would prefer not to flatten here to reduce sorting per layer for retained nodes.
+                    // TODO: would prefer not to flatten here to reduce sorting per layer
+                    //       for retained nodes.
                     .flat_map(|(_key, node_assoc_connections)| {
                         let node_assoc_connections =
                             node_assoc_connections.collect::<Vec<(&Cell<Connection>, u8)>>();
@@ -508,4 +504,4 @@ pub mod rot_net {
             return buffer.iter().map(|x| x.1).collect();
         }
     }
-}
+

@@ -1,8 +1,8 @@
-use net::*;
+use rotnet::*;
 // use net::connection::*;
-use net::rot_net::*;
-use net::rot_net::*;
-use net::*;
+use rotnet::rot_net::*;
+use rotnet::rot_net::*;
+use rotnet::*;
 use rand::{Rng, SeedableRng};
 use std::cell::{Cell, RefCell};
 use std::{boxed::Box, ops::DerefMut};
@@ -12,7 +12,7 @@ extern crate timeit;
 #[cfg(test)]
 mod tests {
     // use net::*;
-    use net::rot_net::*;
+    use rotnet::rot_net::*;
     use std::cell::Cell;
     // TODO: profile before using a different non crypto PRNG.
     //       True entropy is more important than is intuitive for search.
