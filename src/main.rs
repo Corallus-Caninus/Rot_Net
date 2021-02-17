@@ -1,9 +1,9 @@
 use rotnet::*;
 // use net::connection::*;
+use rand::{Rng, SeedableRng};
 use rotnet::rot_net::*;
 use rotnet::rot_net::*;
 use rotnet::*;
-use rand::{Rng, SeedableRng};
 use std::cell::{Cell, RefCell};
 use std::{boxed::Box, ops::DerefMut};
 #[macro_use]
@@ -17,68 +17,68 @@ mod tests {
     // TODO: profile before using a different non crypto PRNG.
     //       True entropy is more important than is intuitive for search.
     use rand::{Rng, SeedableRng};
-    #[test]
-    pub fn construct_rot_net() {
-        let mut rng = rand::thread_rng();
-        // 1. initialize nodes
-        let nodes = network::initialize_nodes(3, 2);
-        let out_nodes = nodes.1.iter().collect::<Vec<&Node>>();
-        let in_nodes = nodes.0.iter().collect::<Vec<&Node>>();
+    // #[test]
+    // pub fn construct_rot_net() {
+    //     let mut rng = rand::thread_rng();
+    //     // 1. initialize nodes
+    //     let num_inputs = 3;
+    //     let num_outputs = 2;
+    //     let nodes = network::initialize_nodes(num_inputs, num_outputs);
 
-        // 2. initialize connections
-        let mut rngs = vec![];
-        for i in 0..out_nodes.len() {
-            println!("generating a connection param rngs..");
-            rngs.push(rng.gen());
-        }
-        // clone the references so we dont move it out until rot_net.
-        let init_connections =
-            network::initialize_connections(in_nodes.clone(), out_nodes.clone(), rngs);
-        let connections = init_connections.iter().collect::<Vec<&Cell<Connection>>>();
+    //     // 2. initialize rot_net
+    //     let extrema_nodes = network::extrema_nodes(nodes.iter().collect(), num_inputs, num_outputs);
+    //     let rot_net = network::initialize_rot_net(nodes, extrema_nodes.0, extrema_nodes.1);
 
-        // 3. initialize rot_net
-        let rot_net = network::rot_net_initialize(in_nodes, out_nodes, connections);
-        // 4. cycle the network
-        let res = rot_net.cycle(vec![1 as u8, 2 as u8, 3 as u8]);
-        for r in res {
-            println!("got result: {}", r);
-        }
-    }
+    //     // 3. initialize connections
+    //     let init_connections = network::initialize_connections(rot_net.inputs, rot_net.outputs);
+    //     let connections = init_connections.iter().collect::<Vec<&Cell<Connection>>>();
+
+    //     // 4. cycle the network
+    //     let res = rot_net.cycle(vec![1 as u8, 2 as u8, 3 as u8]);
+    //     for r in res {
+    //         println!("got result: {}", r);
+    //     }
+    // }
 }
 
 fn main() {
     println!("Hello, world!");
+    let num_inputs = 3;
+    let num_outputs = 2;
 
-    let mut rng = rand::thread_rng();
     // 1. initialize nodes
-    let nodes = network::initialize_nodes(3, 2);
-    let out_nodes = nodes.1.iter().collect::<Vec<&Node>>();
-    let in_nodes = nodes.0.iter().collect::<Vec<&Node>>();
+    let nodes = network::initialize_nodes(num_inputs, num_outputs);
+    // TODO: &Nodes needs to fall off here!
+    let extremas = network::initialize_extrema(&nodes, num_inputs, num_outputs);
+    let inputs = extremas.0;
+    let outputs = extremas.1;
 
     // 2. initialize connections
-    let mut rngs = vec![];
-    for i in 0..out_nodes.len() {
-        for j in 0..in_nodes.len() {
-            rngs.push(rng.gen());
-        }
-    }
-    // clone the references so we dont move it out until rot_net.
-    let init_connections =
-        network::initialize_connections(in_nodes.clone(), out_nodes.clone(), rngs);
-    let connections = init_connections.iter().collect::<Vec<&Cell<Connection>>>();
+    let connections = network::initialize_connections(&inputs, &outputs);
+    //TODO: add connections to nodes
 
     // 3. initialize rot_net
-    let rot_net = network::rot_net_initialize(in_nodes, out_nodes, connections);
+    //network::initialize_network(&inputs, &outputs, &connections.iter().collect());
+    // TODO: just need to drop the borrow on initialize_extrema
+    // TODO: just let inputs and outputs own extrema nodes? this feels like quitting..
+    let rot_net = network {
+        inputs: inputs,
+        outputs: outputs,
+        hidden_nodes: vec![],
+        connections: connections,
+    };
+    rot_net.initialize_network();
 
+    for o in rot_net.outputs.iter() {
+        println!("got topology out_node: {:p}", *o);
+    }
+    for c in rot_net.connections.iter() {
+        println!("got connection out_node: {:p}", c.get().out_node);
+    }
     // 4. cycle the network
-    let res = timeit_loops!(10000000, {
-        let sol = rot_net.clone().cycle(vec![rng.gen(), rng.gen(), rng.gen()]);
-        // for i in sol {
-        //     println!("got {}", i);
-        // }
-    });
-    // println!("time: {}", res);
-    // for r in res {
-    //     println!("got result: {}", r);
-    // }
+    println!("cycling network..");
+    let res = rot_net.cycle(vec![1 as u8, 2 as u8, 3 as u8]);
+    for r in res {
+        println!("got result: {}", r);
+    }
 }

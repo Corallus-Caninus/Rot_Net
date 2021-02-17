@@ -21,7 +21,7 @@ rand= "0.8.3"
 itertools = "0.10.0"
 #mersenne_twister = "1.1.1"
 
-# TODO: code model: small, try to keep jumps local and not use 64 bit addressing if this is the differentiator
+# TODO: code model: small, try to keep jumps local and not use 64 bit addressing if this is the differentiator. DOES THIS LIMIT INLINING?
 #   medium may be advantageous given data ingest. since chunking into u8s this isnt necessarily true.
 # TODO: LTO everything. this requires LLVM frontend/rust backend inlining embed-bytecode
 # TODO: position independant code might be useful for certain routines such as forward prop. This sounds like 
