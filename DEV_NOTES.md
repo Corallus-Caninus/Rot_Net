@@ -67,6 +67,8 @@
 //      2. The topology search can also be constrained by the number of connections per node to get optimal 
 //         cache locality in forward prop/back prop etc. (out_connections || in_connections) == (L1/shared L2 cache)/(num_threads).
 //         since Box<[]> dereferences cache locality wrt the stack and heap.
+//	default the limits of parameter and edges to usize otherwise. Can implement virtual addressing or w/e later if necessary 
+//	(x64 is really big. should do trillions).
 // TODO: just use chunk iterator for now. slice a vec using to_slice method to a known array chunk size. 
 //       (can this be static const configured as a build param?
 /////////// SHADOW ARRAYS ///////////

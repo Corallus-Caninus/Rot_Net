@@ -43,6 +43,7 @@ mod tests {
 
 fn main() {
     println!("Hello, world!");
+    let mut rng = rand::thread_rng();
     let num_inputs = 3;
     let num_outputs = 2;
 
@@ -55,7 +56,12 @@ fn main() {
 
     // 2. initialize connections
     let connections = network::initialize_connections(&inputs, &outputs);
-    //TODO: add connections to nodes
+    for connection in connections.iter() {
+        println!(
+            "verify connection out_node edges: {:p}",
+            connection.get().out_node
+        );
+    }
 
     // 3. initialize rot_net
     //network::initialize_network(&inputs, &outputs, &connections.iter().collect());
@@ -65,19 +71,23 @@ fn main() {
         inputs: inputs,
         outputs: outputs,
         hidden_nodes: vec![],
-        connections: connections,
     };
-    rot_net.initialize_network();
+    println!("initializing out_connections in network..");
+    rot_net.initialize_network_out_connections(connections);
 
+    println!("CONSTRUCTED TOPOLOGY METRICS");
+    for i in rot_net.inputs.iter() {
+        println!("this input has {}", i.out_edges.borrow().len());
+    }
     for o in rot_net.outputs.iter() {
         println!("got topology out_node: {:p}", *o);
     }
-    for c in rot_net.connections.iter() {
-        println!("got connection out_node: {:p}", c.get().out_node);
-    }
+    //for c in rot_net.connections.iter() {
+    //println!("got connection out_node: {:p}", c.get().out_node);
+    //}
     // 4. cycle the network
     println!("cycling network..");
-    let res = rot_net.cycle(vec![1 as u8, 2 as u8, 3 as u8]);
+    let res = rot_net.cycle(vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()]);
     for r in res {
         println!("got result: {}", r);
     }
