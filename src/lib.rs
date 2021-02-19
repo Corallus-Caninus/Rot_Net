@@ -1,4 +1,3 @@
-// #![feature(cell_update)]
 // NOTE: if you dont got a barrel shifter you probably shouldnt be doing data analytics..
 
 // NOTE: this implementation breaks the borrow checker but
@@ -22,6 +21,7 @@
 //       usize. This may be solved with edge count and parameter limitations in architecture search.
 //       this shouldnt happen. let the stack/heap overflow and fix when *if* that happens.
 
+#![feature(cell_update)]
 pub mod rot_net {
     use activations::{cond_rot_act, cond_rot_grad};
     use itertools::Itertools;
@@ -37,7 +37,7 @@ pub mod rot_net {
     //TODO: use generics to ingest any data type and automatically vectorize
     //      larger precision types/classes into self.inputs
     //      cast to bits and discretize/bin? want to be able to send any object and
-    //      chunk/vectorize into a network.
+    //      chunk/vectorize into a Network.
     //      std::mem::transmute might be a good option here. some methods within serde
     //      might also be helpful.
     //     use same generic casting schema for the output harvesting.
@@ -211,7 +211,7 @@ pub mod rot_net {
     }
     impl<'a> Node<'a> {}
     #[derive(Clone)]
-    pub struct network<'a> {
+    pub struct Network<'a> {
         //TODO: if we create struct layer(Vec<&'a Node<'a>>) we
         //      can impl iterator for random walk etc.
         //      is it at all possible to impl iter for Vec<T>?
@@ -223,7 +223,7 @@ pub mod rot_net {
         // at least this assists in not allowing intra-extrema connections
         pub hidden_nodes: Vec<Node<'a>>,
     }
-    impl<'a> network<'a> {
+    impl<'a> Network<'a> {
         // MUTABLE OPERATIONS //
         // TODO: ensure these are threaded appropriately, various borrow_muts which might work in
         //       data parallel operations but will throw Send/Sync.
@@ -232,7 +232,7 @@ pub mod rot_net {
         // TODO: all construction methods should "generate" a value from the thread local rng..
         //       ensure not spinning up a PRNG each call/independantly in a thread stack.
         //       TEST AND CLOSE
-        ///initialize a networks input and output nodes.
+        ///initialize a Networks input and output nodes.
         pub fn initialize_nodes(num_inputs: usize, num_outputs: usize) -> Vec<Node<'a>> {
             let mut owned_nodes = vec![];
             for _i in 0..num_inputs {
@@ -275,7 +275,7 @@ pub mod rot_net {
             res
         }
         /// adds the initial connections to the initial nodes.
-        pub fn initialize_network_out_connections(&self, connections: Vec<Cell<Connection<'a>>>) {
+        pub fn initialize_Network_out_connections(&self, connections: Vec<Cell<Connection<'a>>>) {
             // TODO: doesnt consume all connections.
             self.inputs
                 .iter()
@@ -283,12 +283,10 @@ pub mod rot_net {
                 .take(self.inputs.len() * self.outputs.len())
                 .zip(connections)
                 .for_each(|node| {
+                    node.1.get().out_node.in_edges.update(|x| x + 1);
                     node.0.out_edges.borrow_mut().push(node.1);
-                    let cur_in_edges = node.0.in_edges.get();
-                    node.0.in_edges.replace(cur_in_edges + 1);
                 });
         }
-
         pub fn initialize_extrema(
             // TODO: this borrow needs to fall off?
             nodes: &'a Vec<Node<'a>>,
@@ -307,15 +305,16 @@ pub mod rot_net {
                 .collect::<Vec<&'a Node<'a>>>();
             (inputs, outputs)
         }
+
         // COMPLEXIFYING ROUTINES //
         // TODO: this cannot connect input and output nodes (intra extrema connections)
         //       TEST AND CLOSE
-        /// random walk this network for a Node
-        /// rng should not span larger than the network otherwise the network will
+        /// random walk this Network for a Node
+        /// rng should not span larger than the Network otherwise the Network will
         /// be walked repeatedly until rng is reached, not bad just sub-optimal and TODO.
         pub fn random_walk(&self) -> &'a Node<'a> {
             let mut buffer = vec![];
-            // TODO:  this walk should be an impl Iter for network
+            // TODO:  this walk should be an impl Iter for Network
             //          iter().choose() requires: impl iter for layer{}
             //  TODO: can use cycle() here
             let mut rng = rand::thread_rng();
@@ -359,34 +358,29 @@ pub mod rot_net {
             buffer.iter().choose(&mut rng).unwrap()
         }
 
-        //TODO: BUGGED returns external pointer or clone value
-        /// add a random connection to this network by choosing two nodes at random.
+        /// add a random connection to this Network by choosing two nodes at random.
         pub fn random_connection_nodes(
             &self,
         ) -> (&'a Node<'a>, &'a Node<'a>, Cell<Connection<'a>>) {
-            let mut rng = rand::thread_rng();
+            // TODO: deterministically analyse the Network timeout is sloppy and can theoretically clip.
+            const MAX_ATTEMPTS: i32 = 1000;
+            let mut timeout = 0;
 
-            // get extrema nodes from network
-            // TODO: call local self.local_extrema_nodes
+            let mut rng = rand::thread_rng();
 
             let first_node = self.random_walk();
             let second_node = self.random_walk();
 
-            // TODO: deterministically analyse the network timeout is sloppy and can theoretically clip.
-            let mut timeout = 0;
-            const MAX_ATTEMPTS: i32 = 1000;
             // prevent extrema connections:
             // outputs to input connections
             while (self.outputs.iter().any(|x| std::ptr::eq(*x, first_node))
                 && self.inputs.iter().any(|x| std::ptr::eq(*x, second_node)))
-                //outputs to outputs connections
                 || (self.outputs.iter().any(|x| std::ptr::eq(*x, first_node))
                     && self.outputs.iter().any(|x| std::ptr::eq(*x, second_node)))
-                //input to input connections
                 || (self.inputs.iter().any(|x| std::ptr::eq(*x, first_node))
                     && self.inputs.iter().any(|x| std::ptr::eq(*x, second_node)))
             {
-                // retry if the network's connections arent depleted (marginally extrema-node fully
+                // retry if the Network's connections arent depleted (marginally extrema-node fully
                 // connected)
                 timeout += timeout;
                 if timeout > MAX_ATTEMPTS {
@@ -401,22 +395,21 @@ pub mod rot_net {
             (first_node, second_node, res)
         }
 
-        //pub fn mutate_add_connection(
-        //    &'a mut self,
-        //    in_node: &'a Node<'a>,
-        //    out_node: &'a Node<'a>,
-        //    connection: Cell<Connection<'a>>,
-        //) {
-        //    self.connections.push(connection);
-        //    in_node
-        //        .out_edges
-        //        .borrow_mut()
-        //        .push(&self.connections[self.connections.len() - 1]);
-        //    out_node
-        //        .in_edges
-        //        .borrow_mut()
-        //        .push(&self.connections[self.connections.len() - 1]);
-        //}
+        //        pub fn mutate_add_connection(
+        //            &'a mut self,
+        //            in_node: &'a Node<'a>,
+        //            out_node: &'a Node<'a>,
+        //            connection: Cell<Connection<'a>>,
+        //        ) {
+        //            in_node
+        //                .out_edges
+        //                .borrow_mut()
+        //                .push(&self.connections[self.connections.len() - 1]);
+        //            out_node
+        //                .in_edges
+        //                .borrow_mut()
+        //                .push(&self.connections[self.connections.len() - 1]);
+        //        }
         //TODO: mutate_add_node(self,rng){}
         /// add a connection between two random nodes
         /// first and second rng should point to the same Rng object?
@@ -437,7 +430,7 @@ pub mod rot_net {
 
         //// TODO: this should be wrapped so a connection is the signature.
         ////       may need to be written in implementing class
-        ///// add a node to this network by splitting a connection
+        ///// add a node to this Network by splitting a connection
         //pub fn add_split_node(
         //    self,
         //    in_node: &'a Node<'a>,
@@ -449,6 +442,7 @@ pub mod rot_net {
         //}
 
         // IMMUTABLE OPERATIONS //
+        /// sum and normalize the given input connections to a Node.
         pub fn sum_norm(node_assoc_connections: Vec<(Connection<'a>, u8)>) -> u8 {
             // TODO: could weight these as they arrive? may make more smooth computation.
             let mut sig_sum: u16 = 0;
@@ -464,7 +458,7 @@ pub mod rot_net {
             node_assoc_connections: Vec<(Connection<'a>, u8)>,
         ) -> Vec<(Connection<'a>, u8)> {
             // TODO: this clone is correct in all the wrong ways.
-            let sig_sum = network::sum_norm(node_assoc_connections.clone());
+            let sig_sum = Network::sum_norm(node_assoc_connections.clone());
 
             // node activation and broadcast routine
             // TODO: retain groupings so resort isnt as costly per layer with retained
@@ -482,14 +476,13 @@ pub mod rot_net {
             }
             res
         }
-
         // TODO: at some point this will be matrix ops instead so keep in mind when optimizing.
+        //       all optimizations here are currently for the genetic algorithm and expression of
+        //       the genome to matrix.
         // TODO: optimizations can occur in reducing collects and references. The later may get
         //       backend optimized out anyways with inlining and argpromotion.
         //       (does lazy analysis make algorithms lazy with
         //       inlining?)
-        // TODO: this can be done with cycle instead of recursion. add a break condition and treat
-        //       as while loop
         /// forward propagate this rot_net.
         /// clones signals and returns the output vector.
         /// NOTE: does not support intra-extrema connections
@@ -517,23 +510,11 @@ pub mod rot_net {
                 "entering hidden layer with {} buffer connections",
                 buffer.len()
             );
-
-            let mut timeout = 0; // TODO: TEST//
-
-            while !buffer.iter().any(|(connection)| {
+            while !buffer.iter().any(|connection| {
                 self.outputs
                     .iter()
                     .any(|out| !std::ptr::eq(connection.0.out_node, *out))
             }) {
-                // TODO: TEST //
-                if timeout > 10 {
-                    break;
-                }
-                timeout += 1;
-                println!("in the loop with {}", buffer.len());
-                // END OF TEST //
-
-                // TODO: dropping buffer
                 //iterate a layer of propagation, retaining nodes that dont have all
                 //signals yet.
                 // NOTE: this is useful for
@@ -541,7 +522,8 @@ pub mod rot_net {
                 //      2. recurrent connections only require a small change to node
                 //         retention condition
                 //         and a carry-over signal parameter.
-                // TODO: cannot shadow while condition
+                //      3. graphing out topology. However this should be a seperate walk iter()
+                //         routine that is encapsulated for here and ranomd_walk
                 buffer = buffer
                     .iter()
                     // TODO: hopefully this isnt costly since pre sorted? flat map should flatten
@@ -549,7 +531,6 @@ pub mod rot_net {
                     .sorted_by_key(|assoc_connection| assoc_connection.0.out_node as *const Node)
                     .group_by(|assoc_connection| assoc_connection.0.out_node as *const Node)
                     .into_iter()
-                    .inspect(|x| println!("proc val buff"))
                     .flat_map(|(key, node_assoc_connections)| {
                         let node_assoc_connections = node_assoc_connections
                             .map(|connect| (connect.0, connect.1))
@@ -569,16 +550,14 @@ pub mod rot_net {
                         } else {
                             println!("NODE ACTIVATION");
                             // node normalization and sum routine
-                            network::activate_nodes(node_assoc_connections)
+                            Network::activate_nodes(node_assoc_connections)
                         }
                     })
                     .collect();
-
                 // this is trivial because flatmap just hope and pray this is pre sorted and
                 // sorting algorithm works well with fragmented sort.
             }
 
-            // TODO: sum-norm-activate one more time should extract operation first
             println!("cycle over returning buffer.. {}", buffer.len());
             buffer
                 .iter()
@@ -589,7 +568,7 @@ pub mod rot_net {
                     let node_assoc_connections = node_assoc_connections
                         .map(|connect| (connect.0, connect.1))
                         .collect::<Vec<(Connection, u8)>>();
-                    network::sum_norm(node_assoc_connections)
+                    Network::sum_norm(node_assoc_connections)
                 })
                 .collect::<Vec<u8>>()
 
