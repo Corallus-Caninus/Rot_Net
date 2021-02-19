@@ -13,7 +13,7 @@ extern crate timeit;
 mod tests {
     // use net::*;
     use rotnet::rot_net::*;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     // TODO: profile before using a different non crypto PRNG.
     //       True entropy is more important than is intuitive for search.
     use rand::{Rng, SeedableRng};
@@ -44,13 +44,13 @@ mod tests {
         //Network::initialize_Network(&inputs, &outputs, &connections.iter().collect());
         // TODO: just need to drop the borrow on initialize_extrema
         // TODO: just let inputs and outputs own extrema nodes? this feels like quitting..
-        let rot_net = Network {
+        let mut rot_net = Network {
             inputs: inputs,
             outputs: outputs,
             hidden_nodes: vec![],
         };
         println!("initializing out_connections in Network..");
-        rot_net.initialize_Network_out_connections(connections);
+        rot_net.initialize_network_out_connections(connections);
 
         println!("CONSTRUCTED TOPOLOGY METRICS");
         for i in rot_net.inputs.iter() {
@@ -59,6 +59,8 @@ mod tests {
         for o in rot_net.outputs.iter() {
             println!("got topology out_node: {:p}", *o);
         }
+        // TODO: copy this template as another unittest and call basic
+        //       complexifying routines.
         // 4. cycle the Network
         println!("cycling Network..");
         let res = rot_net.cycle(vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()]);

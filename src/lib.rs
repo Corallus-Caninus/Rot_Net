@@ -1,17 +1,11 @@
 // NOTE: if you dont got a barrel shifter you probably shouldnt be doing data analytics..
 
-// NOTE: this implementation breaks the borrow checker but
-//      doesnt use Rc so can panic but should never leak.
-//      Should only panic when parallelizing or asyncing improperly.
-//
-// TODO: all downstream ownership?: PROFILE FOR THIS DONT SPECULATE
-//       edge: Rc<Node>
-//       node{out_edges = RefCell<Vec<Cell<Connection>>>
-//            in_edges = RefCell<Vec<&Cell<Connection>>>}
-//       rot_net{inputs: Vec<Node>}
-//       ..but this doesnt work for recurrent connections (leak)..
-//       can use primal node as Rc and all others as weak but breaks
-//       pruning and crossover topologies. how is this mutated?
+// NOTE: this implementation uses Rc RefCell and Cell. It should not leak due to unique usage of Rc
+//       and RefCell might only panic in parallelization (should be data parallel safe).
+// TODO: remove all Rc and RefCell. should be possible. This is lower priority than matrix
+//       representation.
+// TODO: care should be taken when implementing loops (circularity) in the graph but also should
+//       not leak Rc.
 
 // TODO: clean up references and clones! make space efficient before
 //       further speed optimization. unless some serious backend or
@@ -29,6 +23,7 @@ pub mod rot_net {
     //       need to ensure not creating too many PRNG states (what is thread_local rng)
     use rand::prelude::*;
     use rand::{random, seq::IteratorRandom};
+    use std::rc::Rc;
     use std::{
         borrow::BorrowMut,
         cell::{Cell, RefCell},
@@ -125,6 +120,8 @@ pub mod rot_net {
 
     #[derive(Clone, Copy)]
     pub struct Connection<'a> {
+        // TODO: Rc this. actually cant leak because connections are unique and dont hold reference
+        //       to their owners.
         pub out_node: &'a Node<'a>,
         // TODO: since these are pointed to from nodes we
         //       can keep adding binary resolution to condition trees
@@ -199,7 +196,8 @@ pub mod rot_net {
         //       data parallel in group operations.
         // NOTE: all downstream ownership to cascade deallocation of subtrees
         //       given dominator node removal.
-        //TODO: this is impossible. needs to be a RefCell or idk what.
+        // NOTE: all Nodes are owned in rot_net calling scope.. hopefully this doesnt bite me in
+        // the ass down the road..
         pub out_edges: RefCell<Vec<Cell<Connection<'a>>>>,
         // TODO: can use num_in_edges as a condition for forward propagation instead.
         //       this makes backprop non trivial..
@@ -217,14 +215,16 @@ pub mod rot_net {
         //      is it at all possible to impl iter for Vec<T>?
         pub inputs: Vec<&'a Node<'a>>,
         pub outputs: Vec<&'a Node<'a>>,
-        //TODO: own here.. +1 indirection but its a start. matrix will probably solve this just
-        //      ensure GA search isnt slow due to this. Anymore optimizations need to be profile
-        //      justified.
-        // at least this assists in not allowing intra-extrema connections
+        // ..at least this assists in not allowing intra-extrema connections
         pub hidden_nodes: Vec<Node<'a>>,
     }
     impl<'a> Network<'a> {
         // MUTABLE OPERATIONS //
+        // NOTE: all these operations must produce, at every step, a proper network. That means all
+        //       nodes must have at least 1 out node and in node and connections cannot connect
+        //       intr-extrema (except from inputs to outputs).
+        //  This is TODO for current construction methods which should be consolidated anyways to
+        //       one public call with private struct update syntax or just one call.
         // TODO: ensure these are threaded appropriately, various borrow_muts which might work in
         //       data parallel operations but will throw Send/Sync.
         // INITIALIZATION ROUTINES //
@@ -275,16 +275,17 @@ pub mod rot_net {
             res
         }
         /// adds the initial connections to the initial nodes.
-        pub fn initialize_Network_out_connections(&self, connections: Vec<Cell<Connection<'a>>>) {
-            // TODO: doesnt consume all connections.
+        pub fn initialize_network_out_connections(&self, connections: Vec<Cell<Connection<'a>>>) {
             self.inputs
                 .iter()
                 .cycle()
                 .take(self.inputs.len() * self.outputs.len())
                 .zip(connections)
                 .for_each(|node| {
-                    node.1.get().out_node.in_edges.update(|x| x + 1);
-                    node.0.out_edges.borrow_mut().push(node.1);
+                    Network::add_connection(node.1, node.0);
+                    //TODO: @DEPRECATED
+                    //node.1.get().out_node.in_edges.update(|x| x + 1);
+                    //node.0.out_edges.borrow_mut().push(node.1);
                 });
         }
         pub fn initialize_extrema(
@@ -307,8 +308,10 @@ pub mod rot_net {
         }
 
         // COMPLEXIFYING ROUTINES //
-        // TODO: this cannot connect input and output nodes (intra extrema connections)
+        // TODO: These cannot connect input and output nodes (intra extrema connections)
         //       TEST AND CLOSE
+
+        //TODO: @DEPRECATED
         /// random walk this Network for a Node
         /// rng should not span larger than the Network otherwise the Network will
         /// be walked repeatedly until rng is reached, not bad just sub-optimal and TODO.
@@ -357,7 +360,7 @@ pub mod rot_net {
             }
             buffer.iter().choose(&mut rng).unwrap()
         }
-
+        //TODO: @DEPRECATED
         /// add a random connection to this Network by choosing two nodes at random.
         pub fn random_connection_nodes(
             &self,
@@ -365,7 +368,6 @@ pub mod rot_net {
             // TODO: deterministically analyse the Network timeout is sloppy and can theoretically clip.
             const MAX_ATTEMPTS: i32 = 1000;
             let mut timeout = 0;
-
             let mut rng = rand::thread_rng();
 
             let first_node = self.random_walk();
@@ -395,51 +397,39 @@ pub mod rot_net {
             (first_node, second_node, res)
         }
 
-        //        pub fn mutate_add_connection(
-        //            &'a mut self,
-        //            in_node: &'a Node<'a>,
-        //            out_node: &'a Node<'a>,
-        //            connection: Cell<Connection<'a>>,
-        //        ) {
-        //            in_node
-        //                .out_edges
-        //                .borrow_mut()
-        //                .push(&self.connections[self.connections.len() - 1]);
-        //            out_node
-        //                .in_edges
-        //                .borrow_mut()
-        //                .push(&self.connections[self.connections.len() - 1]);
-        //        }
         //TODO: mutate_add_node(self,rng){}
-        /// add a connection between two random nodes
-        /// first and second rng should point to the same Rng object?
-        /// NOTE: doesn't currently support connections between outputs and inputs or
-        /// across extrema nodes (input->input and output->output)
 
-        //TODO: @DEPRECATED
-        //pub fn add_connection(
-        //    self,
-        //    new_connection: &'a Cell<Connection<'a>>,
-        //    in_node: &'a Node<'a>,
-        //    out_node: &'a Node<'a>,
-        //) {
-        //    in_node.out_edges.borrow_mut().push(new_connection);
-        //    // TODO: Remove clone here
-        //    out_node.in_edges.borrow_mut().push(new_connection);
-        //}
+        /// add the given connection to the network by giving ownership to the in_node and updating
+        /// the size of the out_nodes in_edges.
+        pub fn add_connection(new_connection: Cell<Connection<'a>>, in_node: &Node<'a>) {
+            new_connection.get().out_node.in_edges.update(|x| x + 1);
+            in_node.out_edges.borrow_mut().push(new_connection);
+        }
+        /// add a node to the network by splitting an existing connection
+        pub fn add_split_node(
+            &'a mut self,
+            prev_node: &Node<'a>,
+            split_connection: &Cell<Connection<'a>>,
+        ) {
+            let mut rng = rand::thread_rng();
+            let node = Node {
+                out_edges: RefCell::new(vec![]),
+                in_edges: Cell::new(0),
+            };
+            self.hidden_nodes.push(node);
+            let node_ref = self.hidden_nodes.get(self.hidden_nodes.len()).unwrap();
+            let new_in_connection = Cell::new(Connection {
+                out_node: node_ref,
+                params: rng.gen(),
+            });
+            Network::add_connection(new_in_connection, prev_node);
 
-        //// TODO: this should be wrapped so a connection is the signature.
-        ////       may need to be written in implementing class
-        ///// add a node to this Network by splitting a connection
-        //pub fn add_split_node(
-        //    self,
-        //    in_node: &'a Node<'a>,
-        //    in_connection: &'a Cell<Connection<'a>>,
-        //    out_connection: &'a Cell<Connection<'a>>,
-        //) {
-        //    in_node.out_edges.borrow_mut().push(in_connection);
-        //    in_node.in_edges.borrow_mut().push(out_connection);
-        //}
+            let new_out_connection = Cell::new(Connection {
+                out_node: split_connection.get().out_node,
+                params: rng.gen(),
+            });
+            Network::add_connection(new_out_connection, node_ref);
+        }
 
         // IMMUTABLE OPERATIONS //
         /// sum and normalize the given input connections to a Node.
