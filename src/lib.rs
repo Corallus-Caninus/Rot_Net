@@ -449,18 +449,23 @@ pub mod rot_net {
         //}
 
         // IMMUTABLE OPERATIONS //
-        /// Activate this node by summing, normalizing and weighting the connections then
-        /// returning the broadcasted signals and out_edge connections.
-        pub fn activate_nodes(
-            node_assoc_connections: Vec<(Connection<'a>, u8)>,
-        ) -> Vec<(Connection<'a>, u8)> {
+        pub fn sum_norm(node_assoc_connections: Vec<(Connection<'a>, u8)>) -> u8 {
             // TODO: could weight these as they arrive? may make more smooth computation.
-
             let mut sig_sum: u16 = 0;
             node_assoc_connections.iter().for_each(|assoc_connection| {
                 sig_sum += assoc_connection.0.weight(assoc_connection.1) as u16;
                 sig_sum = sig_sum >> 1;
             });
+            return sig_sum as u8;
+        }
+        /// Activate this node by summing, normalizing and weighting the connections then
+        /// returning the broadcasted signals and out_edge connections.
+        pub fn activate_nodes(
+            node_assoc_connections: Vec<(Connection<'a>, u8)>,
+        ) -> Vec<(Connection<'a>, u8)> {
+            // TODO: this clone is correct in all the wrong ways.
+            let sig_sum = network::sum_norm(node_assoc_connections.clone());
+
             // node activation and broadcast routine
             // TODO: retain groupings so resort isnt as costly per layer with retained
             // nodes.
@@ -471,10 +476,7 @@ pub mod rot_net {
                 broadcast
                     .iter()
                     .map(|next_connection| {
-                        (
-                            next_connection.get(),
-                            activations::cond_rot_act(sig_sum as u8),
-                        )
+                        (next_connection.get(), activations::cond_rot_act(sig_sum))
                     })
                     .for_each(|x| res.push(x));
             }
@@ -502,9 +504,8 @@ pub mod rot_net {
             let mut buffer = vec![];
             // Initialize: get signals into the topology and ready the first layer
             //  1. each input node gets a signal and broadcasts
-            // TODO: par_iter this as well.
+            // TODO: par_iter this as well. This should be lazy.
             for input in self.inputs.iter() {
-                // TODO: these dont have out_edges
                 println!("got input out_edges {}", input.out_edges.borrow().len());
                 let cur_edges = input.out_edges.borrow();
                 let cur_signal = signals.pop().unwrap();
@@ -519,11 +520,6 @@ pub mod rot_net {
 
             let mut timeout = 0; // TODO: TEST//
 
-            // TODO: work with groups here. this is now layer of nodes instead of layer of
-            // connections. if necessary drop group_by and use sorted values with condition
-            // use sorted vec<Connection, u8> and group by internally since typing on group is
-            // wonky (the whole thing could use some feature love.. cant even group by object
-            // reference..)
             while !buffer.iter().any(|(connection)| {
                 self.outputs
                     .iter()
@@ -584,7 +580,20 @@ pub mod rot_net {
 
             // TODO: sum-norm-activate one more time should extract operation first
             println!("cycle over returning buffer.. {}", buffer.len());
-            return buffer.iter().map(|x| x.1).collect();
+            buffer
+                .iter()
+                .sorted_by_key(|assoc_connection| assoc_connection.0.out_node as *const Node)
+                .group_by(|assoc_connection| assoc_connection.0.out_node as *const Node)
+                .into_iter()
+                .map(|(key, node_assoc_connections)| {
+                    let node_assoc_connections = node_assoc_connections
+                        .map(|connect| (connect.0, connect.1))
+                        .collect::<Vec<(Connection, u8)>>();
+                    network::sum_norm(node_assoc_connections)
+                })
+                .collect::<Vec<u8>>()
+
+            //return buffer.iter().map(|x| x.1).collect();
         }
     }
 }
