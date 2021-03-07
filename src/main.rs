@@ -1,75 +1,97 @@
-use rotnet::*;
-// use net::connection::*;
-use rand::{Rng, SeedableRng};
-use rotnet::rot_net::*;
-use rotnet::rot_net::*;
-use rotnet::*;
-use std::cell::{Cell, RefCell};
-use std::{boxed::Box, ops::DerefMut};
-#[macro_use]
-extern crate timeit;
+//NOTE: this is primarily for unittests
+//TODO: unittest activations::cond_rot_act
+//TODO: unittest activations::cond_rot_grad
+//TODO: unittest connections::weight
 
 #[cfg(test)]
 mod tests {
-    // use net::*;
-    use rotnet::rot_net::*;
-    use std::cell::{Cell, RefCell};
-    // TODO: profile before using a different non crypto PRNG.
-    //       True entropy is more important than is intuitive for search.
-    use rand::{Rng, SeedableRng};
-
+    use psyclones::psyclones::activations::*;
+    use psyclones::psyclones::connections::*;
+    //TODO: assert somehow? assert continuous?
     #[test]
-    pub fn construct_rot_net() {
-        let mut rng = rand::thread_rng();
-        let num_inputs = 3;
-        let num_outputs = 2;
+    pub fn test_weights() {
+        const slopes: [u8; 4] = [
+            0b00001000 as u8,
+            0b00010000 as u8,
+            0b00100000 as u8,
+            0b01000000 as u8,
+        ];
+        println!("TESTING LINEAR BYTE APPROXIMATIONS:");
 
-        // 1. initialize nodes
-        let nodes = Network::initialize_nodes(num_inputs, num_outputs);
-        // TODO: &Nodes needs to fall off here!
-        let extremas = Network::initialize_extrema(&nodes, num_inputs, num_outputs);
-        let inputs = extremas.0;
-        let outputs = extremas.1;
-
-        // 2. initialize connections
-        let connections = Network::initialize_connections(&inputs, &outputs);
-        for connection in connections.iter() {
-            println!(
-                "verify connection out_node edges: {:p}",
-                connection.get().out_node
-            );
+        println!("~SIGMOID ACTIVATION FUNCTION~");
+        //test_cond_rot_act
+        for i in 0..255 {
+            println!("x = {}, y = {}", i as u8, cond_rot_act(i));
         }
 
-        // 3. initialize rot_net
-        //Network::initialize_Network(&inputs, &outputs, &connections.iter().collect());
-        // TODO: just need to drop the borrow on initialize_extrema
-        // TODO: just let inputs and outputs own extrema nodes? this feels like quitting..
-        let mut rot_net = Network {
-            inputs: inputs,
-            outputs: outputs,
-            hidden_nodes: vec![],
-        };
-        println!("initializing out_connections in Network..");
-        rot_net.initialize_network_out_connections(connections);
-
-        println!("CONSTRUCTED TOPOLOGY METRICS");
-        for i in rot_net.inputs.iter() {
-            println!("this input has {}", i.out_edges.borrow().len());
+        //test_linear_exponential
+        println!("~LINEAR EXPONENTIAL~");
+        let mut count = 0;
+        for slope in &slopes {
+            println!("IN LINEAR_EXPONENTIAL ON SLOPE: {}", count);
+            for i in 0..255 {
+                println!("x = {}, y = {}", i as u8, linear_exponential(*slope, i));
+            }
+            count += 1;
         }
-        for o in rot_net.outputs.iter() {
-            println!("got topology out_node: {:p}", *o);
+        //test_linear_decay_logarithm
+        println!("~LINEAR DECAY LOGARITHM~");
+        let mut count = 0;
+        for slope in &slopes {
+            println!("IN LINEAR_DECAY_LOGARITHM ON SLOPE: {}", count);
+            for i in 0..255 {
+                println!("x = {}, y = {}", i as u8, linear_decay_logarithm(*slope, i));
+            }
+            count += 1;
         }
-        // TODO: copy this template as another unittest and call basic
-        //       complexifying routines.
-        // 4. cycle the Network
-        println!("cycling Network..");
-        let res = rot_net.cycle(vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()]);
-        for r in res {
-            println!("got result: {}", r);
+        //test_linear_logarithm
+        println!("~LINEAR LOGARITHM~");
+        let mut count = 0;
+        for slope in &slopes {
+            println!("IN LINEAR_LOGARITHM ON SLOPE: {}", count);
+            for i in 0..255 {
+                println!("x = {}, y = {}", i as u8, linear_logarithm(*slope, i));
+            }
+            count += 1;
+        }
+        //test_linear_decay_exponential
+        println!("~LINEAR DECAY EXPONENTIAL~");
+        let mut count = 0;
+        for slope in &slopes {
+            println!("IN LINEAR_DECAY_EXPONENTIAL ON SLOPE: {}", count);
+            for i in 0..255 {
+                println!(
+                    "x = {}, y = {}",
+                    i as u8,
+                    linear_decay_exponential(*slope, i)
+                );
+            }
+            count += 1;
         }
     }
 }
-
+//TODO:
+//#[test]
+//pub fn linear_decay_logarithm() {
+//    for i in 0..255 {
+//        println!("x = {}, y = {}", i as u8, linear_decay_logarithm(i));
+//    }
+//}
+//#[test]
+//pub fn test_cond_rot_act() {
+//    for i in 0..255 {
+//        println!("x = {}, y = {}", i as u8, (i));
+//    }
+//}
+//#[test]
+//pub fn test_cond_rot_act() {
+//    for i in 0..255 {
+//        println!("x = {}, y = {}", i as u8, cond_rot_act(i));
+//    }
+//}
 fn main() {
+    use psyclones::psyclones::rot_net;
     println!("Hello, world!");
+    let rot_net = rot_net::initialize_rot_net(3, 2);
+    println!("rotation network construction complete");
 }

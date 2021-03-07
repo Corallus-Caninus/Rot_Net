@@ -1,48 +1,12 @@
-// NOTE: if you dont got a barrel shifter you probably shouldnt be doing data analytics..
-
-// NOTE: this implementation uses Rc RefCell and Cell. It should not leak due to unique usage of Rc
-//       and RefCell might only panic in parallelization (should be data parallel safe).
-// TODO: remove all Rc and RefCell. should be possible. This is lower priority than matrix
-//       representation.
-// TODO: care should be taken when implementing loops (circularity) in the graph but also should
-//       not leak Rc.
-
-// TODO: clean up references and clones! make space efficient before
-//       further speed optimization. unless some serious backend or
-//       frontend optimization occurs I dont see how this doesnt bloat.
-
-// TODO: usize is the limiting address factor. ensure there is some safety around overflowing
-//       usize. This may be solved with edge count and parameter limitations in architecture search.
-//       this shouldnt happen. let the stack/heap overflow and fix when *if* that happens.
-
-#![feature(cell_update)]
-pub mod rot_net {
-    use activations::{cond_rot_act, cond_rot_grad};
-    use itertools::Itertools;
-    // TODO: rng needs to be all passed in or called by reference.
-    //       need to ensure not creating too many PRNG states (what is thread_local rng)
-    use rand::prelude::*;
-    use rand::{random, seq::IteratorRandom};
-    use std::rc::Rc;
-    use std::{
-        borrow::BorrowMut,
-        cell::{Cell, RefCell},
-    };
-
-    //TODO: use generics to ingest any data type and automatically vectorize
-    //      larger precision types/classes into self.inputs
-    //      cast to bits and discretize/bin? want to be able to send any object and
-    //      chunk/vectorize into a Network.
-    //      std::mem::transmute might be a good option here. some methods within serde
-    //      might also be helpful.
-    //     use same generic casting schema for the output harvesting.
-
-    //TODO: macro generic? so variable length (would also need variable type?)
-    //pub mod vectorize(){
-    //  pub fn inputs<T>(Vec<T>)-> Vec<u8>
-    //  pub fn outputs<T>(Vec<T>)->Vec<u8>}
-
-    //TODO: should this be an embedded module?
+pub mod psyclones {
+    //TODO: macro generic for variable kwargs and generic input types.
+    //      same thing for output vector? not as important yet unless easy to implement.
+    //TODO: does byte get vectorized and/or represented as a byte in modern pipelines? parameters
+    //      of 64 or 32 bits will defeate the purpose of this quantization. ISAs seem to have byte
+    //      operations but verify this with radare2
+    use rand::*;
+    use std::ops::Index;
+    /// linearly approximated activation functions and their derivatives
     pub mod activations {
         //      hard code a limit to max connection in architecture search or
         //      implementation.
@@ -84,7 +48,7 @@ pub mod rot_net {
         //       show that its more
         //       than a weighted normalization and is the term of approximation. start
         //       with what works and investigate empirically.
-        // TODO: shift the head over into the domain and set slopes as 2 and 4 respectively.
+        // TODO: shift the head over into the domain.
         // TODO: analyse the sigmoid function to calculate the best fitting slope
         //       constrained by 5 segments.
         //       dont just guess. simple calculus and linear regression can resolve this.
@@ -98,9 +62,10 @@ pub mod rot_net {
             // 1. tail of sigmoid is somewhat arbitrarily set @ 30 which is 10% of domain.
             // 2. head of sigmoid is clipped at 255, NOTE: sigmoid spans parameter
             //    precision not cur_buffer precision, this may change.
-            // The lines and intercepts are solved for two slopes: 1/2 and 2 given 1.
+            // The lines and intercept are solved for two slopes: 1/2 and 2 given 1.
             // and 2. This approximation is the maximum precision and minimum error
             // optimizing for speed.
+            // least this and LLVM should reorganize but error on the side of safety.
             if x < SEGMENTS[0] {
                 0
             } else if x < SEGMENTS[1] {
@@ -117,452 +82,477 @@ pub mod rot_net {
             }
         }
     }
-
-    #[derive(Clone, Copy)]
-    pub struct Connection<'a> {
-        // TODO: Rc this. actually cant leak because connections are unique and dont hold reference
-        //       to their owners.
-        pub out_node: &'a Node<'a>,
-        // TODO: since these are pointed to from nodes we
-        //       can keep adding binary resolution to condition trees
-        //       would conditional bitmasking be faster given word size?
-        //
-        // TODO: byte this out dont use booleans each is a byte of bloat.
-        // TODO: bitmask this piece.. what is the space-time tradeoff here?
-        // NOTE: can increase statics to have 9! conditions only scales static
-        //       comparators in weight this allows for all sorts of function
-        //       approximations.
-        // 0b1000000 => direction * or /
-        // 0b0100000 => one shift * or / 2
-        // 0b0010000 => two shift *or / 4
-        //
-        // TODO: may need to cell here so immutable with multiple node references
-        //       (in and out)
-        pub params: u8, // this is up to 8 conditions per const BITCHECK make 'em count.
-    }
-    impl<'a> Connection<'a> {
-        //TODO: derive this
-
-        /// weight the given signal by this connection's params using rotations.
-        pub fn weight(&self, sig: u8) -> u8 {
-            // I like the depth of these conditions as apposed to unrolled elif elif etc.
-            // conditional branching is faster just like a tree is faster than a list
-            // and *should* have better branch prediction given posterior indirection.
-            // TODO: functionally declare this with prototyped levels of conditions
-            //       and rotations
-            //       using traits if such resolution shows promise: impl weight for
-            //       Connection{}
-            //       declare this in psyclone/implementation and virtualize here?
-            //  IMPLEMENTATIONS:
-            //  1. notch_rot // is slow. has alot of expressivity but there are better
-            //     ways to bit approx functions.
-            //  2. n resolution (sig <</>> n)
-            // TODO: can this be differentiated by retaining signals in parameters?
-            //       less parameter-space efficient but just as fast forwards and backwards
-            // TODO: should this return a 16? can get more domain out of rot but I
-            //       designed this as u8
-            //       so requires some further research
-
-            // TODO: unittest this.
-
-            // notch out a bitflag compare. currently 2 ops and a cmp (3 ops) can XOR
-            // bitmasking make this faster?
-            const BITCHECK: u8 = 0b10000000;
-            //single rotation
-            if self.params >> 1 << 7 == BITCHECK {
-                // direction bitflag is LSB so we just wipe other bits
-                // will get optimized further in the backend for conditions
-                // so this is enough..
-                if self.params << 7 == BITCHECK {
-                    sig >> 1
+    ///linearly approximated connection weightings and their derivatives
+    pub mod connections {
+        /// weights a given signal by a connections parameter.
+        ///
+        /// NOTE: exponential linear approximation has alot of interesting features. 1 point of
+        /// intersection 2 slopes. can approximate any given quadrant of a saddle
+        /// (approximate multiplication) as well as quadratic while normalizing.
+        ///
+        /// BITREP:
+        /// bits 8 and 1 set dropout and passthrough behaviour for network.
+        /// bits 2 and 3 select function (approximation of a saddle quadrant)
+        /// bits 4-7 select slope of given function.  
+        ///
+        /// TODO: test with radare2 if binary operations of scrubbing >><< result in
+        ///      binary-compare equivalent instruction since its much faster even
+        ///      with barrel shifter. Also ensure byte instructions are stuffed to mmx or used
+        ///      moreover. This heavily relies on the llvm backend.
+        /// TODO: may be worth unrolling as bitchecks for some level of permutations
+        ///       if optimizations dont occur.
+        /// TODO: skip list > comparisons like in cond_rot_act faster than shifting?
+        /// MSB isnt used so consider u8/2
+        /// if param > u8/4{
+        /// if param > u8/8{}
+        /// }
+        pub fn weight(signal: u8, param: u8) -> u8 {
+            const MSB_BITCHECK: u8 = 0b10000000;
+            const LSB_BITCHECK: u8 = 0b00000001;
+            // dont have to worry about scrubbing using bitcompare instructions.
+            if param >> 7 == LSB_BITCHECK {
+                //CMP BIT 8
+                //passthrough the signal as a residual connection that skips this layer:
+                // TODO: special case do not activate in forward_propagation! consider
+                //       an option<u8> return type or just check in calling scope and
+                //       pass the bit here.
+                //  TODO: a node_index with 0 connections can signify a residual connection instead
+                //  of here. This is usize vs 8 bit though.
+                //       option<*T> == *T but does option<T> == T?
+                // TODO: some computation balancing can be done by performing weighting at different
+                //       depths of residual connections. instead of immediately weighting then residually passing
+                //       through layers until at the out node pick a layer that isnt wide in the sequence 
+                //       of residual connections and perform weighting at that position. This
+                //       should be done later.
+                signal
+            } else if param << 7 == MSB_BITCHECK {
+                //CMP BIT 1
+                //deactivated connection so shunt signal:
+                //TODO: allow dropout in rot_net for performance.
+                0 as u8
+            } else {
+                //perform the weighting function:
+                if param >> 1 << 7 == MSB_BITCHECK {
+                    //CMP BIT 2
+                    if param >> 2 << 7 == MSB_BITCHECK {
+                        //CMP BIT 3
+                        //Exponential
+                        //pass bits 5-8 into function for slopes
+                        linear_exponential(signal, param)
+                    } else {
+                        //Reflected Exponential
+                        linear_decay_logarithm(signal, param)
+                    }
                 } else {
-                    sig << 1
+                    //reflects along y axis
+                    if param >> 2 << 7 == MSB_BITCHECK {
+                        //CMP BIT 3
+                        //Logarithm
+                        linear_logarithm(signal, param)
+                    } else {
+                        //Exponential Decay
+                        linear_decay_exponential(signal, param)
+                    }
                 }
-            //double rotation
-            } else if self.params >> 2 << 7 == BITCHECK {
-                if self.params << 7 == BITCHECK {
-                    sig >> 2
+            }
+        }
+        //TODO: verify these dont require offsets since >><< 2 requires values > 128+64
+        //      to be in phase
+        //  TODO: sort these bit compares so they align for each function's concentric rectangles
+        //        (read: Polygons)
+        //        of intersections so mutations are done sensibly and represent a latent
+        //        representation
+        ///approximate an exponential function of variable time constants with two lines
+        pub fn linear_exponential(param: u8, signal: u8) -> u8 {
+            const MSB_BITCHECK: u8 = 0b10000000;
+            // NOTE: these should all be > 127 since using upper half of domain in exponential
+            const INTERCEPTS: [u8; 4] = [146, 171, 205, 219];
+
+            // TODO: this is the only function not aligned
+            //       with intercepting lines: 1,1 2,1 1,2 2,2
+            //       TEST AND CLOSE
+            // TODO: reorganize intercepts for readability
+
+            if param >> 3 << 7 == MSB_BITCHECK {
+                //CMP BIT 4
+                // exponential with slopes 1/2,2
+                //  intercept @ (170.6_,85.3_)
+                if signal > INTERCEPTS[1] {
+                    signal << 1
                 } else {
-                    sig << 2
+                    signal >> 1
+                }
+            } else if param >> 4 << 7 == MSB_BITCHECK {
+                //CMP BIT 5
+                // exponential with slopes 1/2, 4
+                // intercept @ (219.4285714, 109.7142857)
+                if signal > INTERCEPTS[3] {
+                    signal << 2
+                } else {
+                    signal >> 1
+                }
+            } else if param >> 5 << 7 == MSB_BITCHECK {
+                //CMP BIT 6
+                // exponential with slopes 1/4, 2
+                // intercept @ (146.2857, 36.57143)
+                if signal > INTERCEPTS[0] {
+                    signal << 1
+                } else {
+                    signal >> 2
                 }
             } else {
-                sig //pass the signal fallthrough
-            }
-        }
-    }
-    #[derive(Clone)]
-    pub struct Node<'a> {
-        // NOTE: RefCell is prevented in share and send but this should be
-        //       data parallel in group operations.
-        // NOTE: all downstream ownership to cascade deallocation of subtrees
-        //       given dominator node removal.
-        // NOTE: all Nodes are owned in rot_net calling scope.. hopefully this doesnt bite me in
-        // the ass down the road..
-        pub out_edges: RefCell<Vec<Cell<Connection<'a>>>>,
-        // TODO: can use num_in_edges as a condition for forward propagation instead.
-        //       this makes backprop non trivial..
-        //       will matrix be ready before backprop? just backprop matrix weights?
-        //       pro: doesnt require a search each time
-        //       con: is an extra usize on the params and cant backprop without search.
-        //       solve the problems as they appear.
-        pub in_edges: Cell<usize>,
-    }
-    impl<'a> Node<'a> {}
-    #[derive(Clone)]
-    pub struct Network<'a> {
-        //TODO: if we create struct layer(Vec<&'a Node<'a>>) we
-        //      can impl iterator for random walk etc.
-        //      is it at all possible to impl iter for Vec<T>?
-        pub inputs: Vec<&'a Node<'a>>,
-        pub outputs: Vec<&'a Node<'a>>,
-        // ..at least this assists in not allowing intra-extrema connections
-        pub hidden_nodes: Vec<Node<'a>>,
-    }
-    impl<'a> Network<'a> {
-        // MUTABLE OPERATIONS //
-        // NOTE: all these operations must produce, at every step, a proper network. That means all
-        //       nodes must have at least 1 out node and in node and connections cannot connect
-        //       intr-extrema (except from inputs to outputs).
-        //  This is TODO for current construction methods which should be consolidated anyways to
-        //       one public call with private struct update syntax or just one call.
-        // TODO: ensure these are threaded appropriately, various borrow_muts which might work in
-        //       data parallel operations but will throw Send/Sync.
-        // INITIALIZATION ROUTINES //
-        // TODO: consolidate these into one method?
-        // TODO: all construction methods should "generate" a value from the thread local rng..
-        //       ensure not spinning up a PRNG each call/independantly in a thread stack.
-        //       TEST AND CLOSE
-        ///initialize a Networks input and output nodes.
-        pub fn initialize_nodes(num_inputs: usize, num_outputs: usize) -> Vec<Node<'a>> {
-            let mut owned_nodes = vec![];
-            for _i in 0..num_inputs {
-                //create input node
-                let next_node: Node = Node {
-                    //in_edges: RefCell::new(vec![]),
-                    out_edges: RefCell::new(vec![]),
-                    in_edges: Cell::new(0),
-                };
-                owned_nodes.push(next_node);
-            }
-            for _i in 0..num_outputs {
-                //create output node
-                let next_node = Node {
-                    //in_edges: RefCell::new(vec![]),
-                    out_edges: RefCell::new(vec![]),
-                    in_edges: Cell::new(0),
-                };
-                owned_nodes.push(next_node);
-            }
-            owned_nodes
-        }
-        /// returns initial connections given initial nodes.
-        pub fn initialize_connections(
-            inputs: &Vec<&'a Node<'a>>,
-            outputs: &Vec<&'a Node<'a>>,
-        ) -> Vec<Cell<Connection<'a>>> {
-            let mut rng = rand::thread_rng();
-            //TODO: need to add to input and output node edges
-            let mut res = vec![];
-            for _j in 0..inputs.len() {
-                for i in outputs.iter() {
-                    let cur = Connection {
-                        out_node: *i,
-                        params: rng.gen(),
-                    };
-                    res.push(Cell::new(cur));
+                //CMP BIT 7
+                // exponential with slopes 1/4, 4
+                //  intercept @ (204.8, 51.2)
+                if signal > INTERCEPTS[2] {
+                    signal << 2
+                } else {
+                    signal >> 2
                 }
             }
-            res
         }
-        /// adds the initial connections to the initial nodes.
-        pub fn initialize_network_out_connections(&self, connections: Vec<Cell<Connection<'a>>>) {
-            self.inputs
-                .iter()
-                .cycle()
-                .take(self.inputs.len() * self.outputs.len())
-                .zip(connections)
-                .for_each(|node| {
-                    Network::add_connection(node.1, node.0);
+        //TODO: this isnt really a linear approximation of logarithmic decay. Call these
+        //      reflections of exponent and logarithm to make more intuitive its relation to saddle
+        //      function and scaling rectangular intercepts.
+        ///approximate a logarithmic decay function (reflected logarithm) with 2 lines
+        pub fn linear_decay_logarithm(param: u8, signal: u8) -> u8 {
+            const MSB_BITCHECK: u8 = 0b10000000;
+            // NOTE: these should all be > 127 since using upper half of domain in exponential
+            const INTERCEPTS: [u8; 4] = [170, 219, 146, 204];
+
+            // TODO: these are not in ascending order of decay constant. sorted with
+            // every other value (this will matter when attempting to differentiate)
+            if param >> 3 << 7 == MSB_BITCHECK {
+                //CMP BIT 4
+                // intercept @ (170, 170)
+                if signal > INTERCEPTS[0] {
+                    255 - (signal << 1) //NOTE: the inverse from 255
+                } else {
+                    255 - (signal >> 1)
+                }
+            } else if param >> 4 << 7 == MSB_BITCHECK {
+                //CMP BIT 5
+                // intercept @ (218.5714, 145.7143)
+                if signal > INTERCEPTS[1] {
+                    255 - (signal << 2)
+                } else {
+                    255 - (signal >> 1)
+                }
+            } else if param >> 5 << 7 == MSB_BITCHECK {
+                //CMP BIT 6
+                // intercept @ (145.7142, 218.5714)
+                if signal > INTERCEPTS[2] {
+                    255 - (signal << 1)
+                } else {
+                    255 - (signal >> 2)
+                }
+            } else {
+                //CMP BIT 7
+                // intercept @ (204,204)
+                if signal > INTERCEPTS[3] {
+                    255 - (signal << 2)
+                } else {
+                    255 - (signal >> 2)
+                }
+            }
+        }
+        ///approximate a logarithm with 2 lines
+        /// NOTE: the slope change in this permutation
+        pub fn linear_logarithm(param: u8, signal: u8) -> u8 {
+            const MSB_BITCHECK: u8 = 0b10000000;
+            const INTERCEPTS: [u8; 4] = [85, 109, 36, 51];
+
+            // TODO: can offset be a bit mask? probably the same backend optimizations.
+            // TODO: these are not in ascending order of decay constant. sorted with
+            // every other value (this will matter when attempting to differentiate)
+            if param >> 3 << 7 == MSB_BITCHECK {
+                //CMP BIT 4
+                // intercept @ (85, 170)
+                // for offset: upper slope is y=0.5x + 127.5
+                if signal > INTERCEPTS[0] {
+                    (signal >> 1) + 128
+                } else {
+                    signal << 1
+                }
+            } else if param >> 4 << 7 == MSB_BITCHECK {
+                //CMP BIT 5
+                // intercept @ (109.2857, 218.5714)
+                // for offset: upper slope is y=0.25x + 191.25
+                if signal > INTERCEPTS[1] {
+                    (signal >> 2) + 192
+                } else {
+                    signal << 1
+                }
+            } else if param >> 5 << 7 == MSB_BITCHECK {
+                //CMP BIT 6
+                // intercept @ (36.42857, 145.714285)
+                // for offset: upper slope is y=0.5x + 127.5
+                if signal > INTERCEPTS[2] {
+                    (signal >> 1) + 128
+                } else {
+                    signal << 2
+                }
+            } else {
+                //CMP BIT 7
+                //intercept @ (51,204)
+                // for offset: upper slope is 0.25x + 191.25
+                if signal > INTERCEPTS[3] {
+                    (signal >> 2) + 192
+                } else {
+                    signal << 2
+                }
+            }
+        }
+        ///approximate an exponential decay function with 2 lines
+        pub fn linear_decay_exponential(param: u8, signal: u8) -> u8 {
+            const MSB_BITCHECK: u8 = 0b10000000;
+            const INTERCEPTS: [u8; 4] = [85, 109, 36, 51];
+
+            // TODO: does this need offset considerations as well?
+            //       just unittest at this point.
+            if param >> 3 << 7 == MSB_BITCHECK {
+                if signal > INTERCEPTS[0] {
+                    //CMP BIT 4
+                    // intercept @ (85, 85)
+                    // for offset: under slope is y=-0.5 + 127.5
+                    128 - (signal >> 1)
+                } else {
+                    255 - (signal << 1)
+                }
+            } else if param >> 4 << 7 == MSB_BITCHECK {
+                //CMP BIT 5
+                // intercept @ (109.2857, 36.4286)
+                // for offset: under slope is y=-0.25 + 64
+                if signal > INTERCEPTS[1] {
+                    64 - (signal >> 2)
+                } else {
+                    255 - (signal << 1)
+                }
+            } else if param >> 5 << 7 == MSB_BITCHECK {
+                //CMP BIT 6
+                // intercept @ (36.42857, 109.2857)
+                // for offset: under slope is y=-0.5 + 128
+                if signal > INTERCEPTS[2] {
+                    128 - (signal >> 1)
+                } else {
+                    255 - (signal << 2)
+                }
+            } else {
+                //CMP BIT 7
+                // intercept @ (51, 51)
+                // for offset: under slope is y=-0.25 + 64
+                if signal > INTERCEPTS[3] {
+                    64 - (signal >> 2)
+                } else {
+                    255 - (signal << 2)
+                }
+            }
+        }
+        //TODO: derivative functions
+    }
+
+    /// an Artificial Neural Network represented as a flattened tensor of layer wise adjacency
+    /// matrices. Uses shifts, conditions and masking to approximate linear functions to improve
+    /// CPU based Neural Networks and provide a platform for both architecture search given finite
+    /// resources and transfer learning.
+    ///
+    /// ---
+    /// Recommended literature:
+    /// --K.Stanley's NEAT algorithm for how architecture search and fitness
+    /// landscape modelling can be done (genetic distance/position using innovation numbers).
+    /// --fundamentals of neural networks (any author) including gradient descent and optimizers.
+    /// Understand ADAM vs SGD and the limitations and performance tradeoffs in these
+    /// methodologies.
+    /// --batch normalization (any author). How batch normalization effects bias terms and changes
+    /// the fitness landscape. The tradeoffs of batch size and the computation of the two normalization
+    /// coefficients.
+    /// --fundamentals of computer architecture. How pipelines work, what causes
+    /// bubbles/stalls/noops. pipeline stuffing and parallel execution engines. (any author)
+    pub struct rot_net {
+        tensor: Vec<u8>, // a vectorized compact representation of connections
+        // NOTE: this is alot of vectors but it keeps parameters tight like wonder womans lasso
+        // layer widths is num nodes to chunk. Each index is a layer
+        layer_widths: Vec<usize>,
+        // layer nodes is the chunk size of tensor parameters for each node
+        // in this layer. Each index is a node's connections (a node).
+        layer_nodes: Vec<usize>,
+
+        // counter for iteration defaults 0 NOTE: NON-ATOMIC
+        layer_counter: usize, 
+    }
+    // NOTE: using iterators one can implement a custom counting type to address larger than
+    //       architecture's usize such as 127 type but should be considered in conjunction with
+    //       MMX/AVX passes in LLVM
+    //
+    ///  iterate this rot_net by each layers connections (parameters) as slices of parameters per
+    ///  node. 
+    ///  inner vectors are row span (in_connections) and entries in vec are column span (nodes)
+    ///  of the current layer matrix. This returns value copies and is not for mutation.
+    impl Iterator for rot_net {
+        type Item = Vec<Vec<u8>>;
+
+        //TODO: Yet Another Pointer Cleanup
+        //TODO: whats the over under on cloning here..
+        fn next(&mut self) -> Option<Vec<Vec<&u8>>> {
+            if self.layer_counter == self.layer_widths.len() {
+                self.layer_counter = 0;
+                None
+            } else {
+                //NOTE: much of this is parallelizable
+
+                //TODO: BEGIN REFACTOR EXTRACTION //
+                // the index coordinates for this layer's nodes
+                // the starting index of the layer
+                let layer_index = self.layer_widths.iter().take(self.layer_counter).sum();
+                // the length of the layer
+                let layer_length = self
+                    .layer_widths
+                    .iter()
+                    .skip(self.layer_counter)
+                    .next()
+                    .unwrap();
+                // The index coordinates for each nodes connections
+                // the starting node of the layer
+                let node_index = self.layer_nodes.iter().take(layer_index).sum::<usize>();
+                // the length of the nodes in this layer
+                let node_length = self
+                    .layer_nodes
+                    .iter()
+                    .skip(layer_index)
+                    .take(*layer_length)
+                    .collect::<Vec<&usize>>();
+                // TODO: END REFACTOR EXTRACTION //
+
+                let layer = node_length
+                    .iter()
+                    .enumerate()
+                    .map(|node| {
+                        self.tensor
+                            .iter()
+                            .skip(
+                                node_index
+                                    + node_length.iter().take(node.0).cloned().sum::<usize>(),
+                            )
+                            .take(**node.1)
+                            //TODO: prove if this has better cache locality performance.
+                            //.cloned()//NOTE: this should be equivalent of map copy deref. is this preferable?
+                            .collect::<Vec<&u8>>()
+                    })
+                    .collect::<Vec<Vec<&u8>>>();
+                // ready for matrix multiplication or other weighting-normalization-activation
+                // routine
+
+                self.layer_counter += 1;
+                Some(layer)
+            }
+        }
+    }
+    // TODO: rename for readability and to convey teirs of abstraction
+    /// Returns a node's layer index and node index in that layer.
+    pub struct net_index {
+        layer: usize,
+        node: usize,
+    }
+    /// The index and length of a node's connections in self.tensor.
+    pub struct node_tensor_index{
+        index: usize,
+        length: usize,
+    }
+    //TODO: derive next for layerwise iteration with itertools
+    impl rot_net {
+        ///return the starting index and length of a node's index in self.tensor
+        fn get(&self, index: net_index) -> node_tensor_index {
+            let layer_index = self.layer_widths.iter().take(index.layer).sum();
+
+            let node_index = self.layer_nodes.iter().take(layer_index).sum::<usize>();
+            let node_length = self.layer_nodes.iter().skip(layer_index).next();
+
+            node_tensor_index{node_index, node_length}
+        }
+        /// rot_net constructor that builds an initial fully connected topology
+        pub fn initialize_rot_net(num_inputs: usize, num_outputs: usize) -> Self {
+            let mut rng = rand::thread_rng();
+
+            //initialize the initial topology's layer.
+            let mut init_topology = vec![];
+            for connection in 0..num_inputs * num_outputs {
+                init_topology.push(rng.gen::<u8>());
+            }
+            //initialize rot_net with the single layer.
+            rot_net {
+                tensor: init_topology,
+                layer_widths: vec![num_inputs * num_outputs],
+                // TODO: this should be a value for each input node
+                layer_nodes: vec![num_inputs],
+                layer_counter: 0,
+            }
+        }
+        ///adds a connection by passing two addresses of positions in the vector. must be acyclic
+        ///(the first layer must be a smaller index than the second).
+        ///This is the fundamental mutation operation for rot_net.
+        fn add_connection(&mut self, input_node: net_index, output_node: net_index) {
+            //NOTE: shouldnt need output_node otherwise since nodes are positionally indexed wrt
+            //      input connections.
+            let intermediate_layers = input_node.layer - output_node.layer;
+            debug_assert!(intermediate_layers >= 0); // cycles are not allowed this assertion should be wrapped away
+
+            let mut rng = rand::thread_rng();
+
+            // 1. mutate previous layer, add the in_connection to this layer.
+            // parameters are represented by incoming connections to nodes so we add to output_node here.
+            let new_connection =  rng.gen();
+            self.tensor.insert(self.get(output_node).index, new_connection);
+            
+            if intermediate_layers == 0 {
+                // 2. add a new connection to the node by inserting in previous layer
+                //    since layers are defined as connections going into nodes.
+                // NOTE: these have to be done together to preserve index in self.tensor 
+                //       so consider refactoring
+                let prev_value = self.layer_nodes.remove(input_node.node);
+                self.layer_nodes.insert(input_node.node, prev_value+1);
+            } else {
+                // 3. add residual connections for all cross-sectional edges of the new layer if
+                //    multiple intermediate layers exist.
+                // TODO: this should always create nodes
+                let tensor_node = self.get(input_node).index;
+                //count from one since first layer already has actual connection.
+                for layer in 1..intermediate_layers{
+                    let residual_connection = 0b10000000;
+                    //TODO: would self.iter() be useful here?
+
+                    self.layer_width.iter().skip(input_node.layer+layer).next()+=1;
+                    self.layer_nodes.iter().skip(input_node.layer).next()+=1;
+
+                    self.tensor.insert(self.get(output_node).index, residual_connection);
                     //TODO: @DEPRECATED
-                    //node.1.get().out_node.in_edges.update(|x| x + 1);
-                    //node.0.out_edges.borrow_mut().push(node.1);
-                });
-        }
-        pub fn initialize_extrema(
-            // TODO: this borrow needs to fall off?
-            nodes: &'a Vec<Node<'a>>,
-            num_inputs: usize,
-            num_outputs: usize,
-        ) -> (Vec<&'a Node<'a>>, Vec<&'a Node<'a>>) {
-            use crate::rot_net::*;
-            let inputs: Vec<&'a Node<'a>> = vec![];
-            // TODO: cannot outlive borrowed content.. vec can change reference so these are locked
-            // together
-            let inputs = nodes.iter().take(num_inputs).collect::<Vec<&'a Node<'a>>>();
-            let outputs = nodes
-                .iter()
-                .skip(num_inputs)
-                .take(num_outputs)
-                .collect::<Vec<&'a Node<'a>>>();
-            (inputs, outputs)
-        }
-
-        // COMPLEXIFYING ROUTINES //
-        // TODO: These cannot connect input and output nodes (intra extrema connections)
-        //       TEST AND CLOSE
-
-        //TODO: @DEPRECATED
-        /// random walk this Network for a Node
-        /// rng should not span larger than the Network otherwise the Network will
-        /// be walked repeatedly until rng is reached, not bad just sub-optimal and TODO.
-        pub fn random_walk(&self) -> &'a Node<'a> {
-            let mut buffer = vec![];
-            // TODO:  this walk should be an impl Iter for Network
-            //          iter().choose() requires: impl iter for layer{}
-            //  TODO: can use cycle() here
-            let mut rng = rand::thread_rng();
-
-            buffer = self
-                .inputs
-                .iter()
-                .flat_map(|x| {
-                    x.out_edges
-                        .borrow()
-                        .to_owned()
-                        .into_iter()
-                        .map(|y| y.get().out_node)
-                })
-                .collect();
-            for _i in 0..rng.gen::<usize>() {
-                buffer = buffer
-                    .iter()
-                    .flat_map(|x| {
-                        x.out_edges
-                            .borrow()
-                            .to_owned()
-                            .into_iter()
-                            .map(|y| y.get().out_node)
-                    })
-                    .collect();
-                if buffer.len() == 0 {
-                    buffer = self
-                        .inputs
-                        .iter()
-                        .flat_map(|x| {
-                            x.out_edges
-                                .borrow()
-                                .to_owned()
-                                .into_iter()
-                                .map(|y| y.get().out_node)
-                        })
-                        .collect();
+                    //self.layer_widths[input_node.layer+layer]+=1;
+                    //self.layer_nodes[input_node.node]+=1;;
                 }
             }
-            buffer.iter().choose(&mut rng).unwrap()
         }
-        //TODO: @DEPRECATED
-        /// add a random connection to this Network by choosing two nodes at random.
-        pub fn random_connection_nodes(
-            &self,
-        ) -> (&'a Node<'a>, &'a Node<'a>, Cell<Connection<'a>>) {
-            // TODO: deterministically analyse the Network timeout is sloppy and can theoretically clip.
-            const MAX_ATTEMPTS: i32 = 1000;
-            let mut timeout = 0;
-            let mut rng = rand::thread_rng();
-
-            let first_node = self.random_walk();
-            let second_node = self.random_walk();
-
-            // prevent extrema connections:
-            // outputs to input connections
-            while (self.outputs.iter().any(|x| std::ptr::eq(*x, first_node))
-                && self.inputs.iter().any(|x| std::ptr::eq(*x, second_node)))
-                || (self.outputs.iter().any(|x| std::ptr::eq(*x, first_node))
-                    && self.outputs.iter().any(|x| std::ptr::eq(*x, second_node)))
-                || (self.inputs.iter().any(|x| std::ptr::eq(*x, first_node))
-                    && self.inputs.iter().any(|x| std::ptr::eq(*x, second_node)))
-            {
-                // retry if the Network's connections arent depleted (marginally extrema-node fully
-                // connected)
-                timeout += timeout;
-                if timeout > MAX_ATTEMPTS {
-                    break;
-                }
-            }
-
-            let res = Cell::new(Connection {
-                out_node: first_node,
-                params: rng.gen::<u8>(),
-            });
-            (first_node, second_node, res)
-        }
-
-        //TODO: mutate_add_node(self,rng){}
-
-        /// add the given connection to the network by giving ownership to the in_node and updating
-        /// the size of the out_nodes in_edges.
-        pub fn add_connection(new_connection: Cell<Connection<'a>>, in_node: &Node<'a>) {
-            new_connection.get().out_node.in_edges.update(|x| x + 1);
-            in_node.out_edges.borrow_mut().push(new_connection);
-        }
-        /// add a node to the network by splitting an existing connection
-        pub fn add_split_node(
-            &'a mut self,
-            prev_node: &Node<'a>,
-            split_connection: &Cell<Connection<'a>>,
-        ) {
-            let mut rng = rand::thread_rng();
-            let node = Node {
-                out_edges: RefCell::new(vec![]),
-                in_edges: Cell::new(0),
-            };
-            self.hidden_nodes.push(node);
-            let node_ref = self.hidden_nodes.get(self.hidden_nodes.len()).unwrap();
-            let new_in_connection = Cell::new(Connection {
-                out_node: node_ref,
-                params: rng.gen(),
-            });
-            Network::add_connection(new_in_connection, prev_node);
-
-            let new_out_connection = Cell::new(Connection {
-                out_node: split_connection.get().out_node,
-                params: rng.gen(),
-            });
-            Network::add_connection(new_out_connection, node_ref);
-        }
-
-        // IMMUTABLE OPERATIONS //
-        /// sum and normalize the given input connections to a Node.
-        pub fn sum_norm(node_assoc_connections: Vec<(Connection<'a>, u8)>) -> u8 {
-            // TODO: could weight these as they arrive? may make more smooth computation.
-            let mut sig_sum: u16 = 0;
-            node_assoc_connections.iter().for_each(|assoc_connection| {
-                sig_sum += assoc_connection.0.weight(assoc_connection.1) as u16;
-                sig_sum = sig_sum >> 1;
-            });
-            return sig_sum as u8;
-        }
-        /// Activate this node by summing, normalizing and weighting the connections then
-        /// returning the broadcasted signals and out_edge connections.
-        pub fn activate_nodes(
-            node_assoc_connections: Vec<(Connection<'a>, u8)>,
-        ) -> Vec<(Connection<'a>, u8)> {
-            // TODO: this clone is correct in all the wrong ways.
-            let sig_sum = Network::sum_norm(node_assoc_connections.clone());
-
-            // node activation and broadcast routine
-            // TODO: retain groupings so resort isnt as costly per layer with retained
-            // nodes.
-
-            let mut res: Vec<(Connection<'a>, u8)> = vec![];
-            for node_assoc_connection in node_assoc_connections.iter() {
-                let broadcast = node_assoc_connection.0.out_node.out_edges.borrow();
-                broadcast
-                    .iter()
-                    .map(|next_connection| {
-                        (next_connection.get(), activations::cond_rot_act(sig_sum))
-                    })
-                    .for_each(|x| res.push(x));
-            }
-            res
-        }
-        // TODO: at some point this will be matrix ops instead so keep in mind when optimizing.
-        //       all optimizations here are currently for the genetic algorithm and expression of
-        //       the genome to matrix.
-        // TODO: optimizations can occur in reducing collects and references. The later may get
-        //       backend optimized out anyways with inlining and argpromotion.
-        //       (does lazy analysis make algorithms lazy with
-        //       inlining?)
-        /// forward propagate this rot_net.
-        /// clones signals and returns the output vector.
-        /// NOTE: does not support intra-extrema connections
-        ///       (input->input output->input etc. except init topology input->output)
-        pub fn cycle(&'a self, signals: Vec<u8>) -> Vec<u8> {
-            let mut signals = signals.clone();
-
-            for i in self.outputs.iter() {
-                // print out_node
-                println!("INIT CYCLE: output node is: {:p}", *i);
-            }
-            let mut buffer = vec![];
-            // Initialize: get signals into the topology and ready the first layer
-            //  1. each input node gets a signal and broadcasts
-            // TODO: par_iter this as well. This should be lazy.
-            for input in self.inputs.iter() {
-                println!("got input out_edges {}", input.out_edges.borrow().len());
-                let cur_edges = input.out_edges.borrow();
-                let cur_signal = signals.pop().unwrap();
-                for edge in cur_edges.iter() {
-                    buffer.push((edge.get(), cur_signal));
-                }
-            }
-            println!(
-                "entering hidden layer with {} buffer connections",
-                buffer.len()
-            );
-            while !buffer.iter().any(|connection| {
-                self.outputs
-                    .iter()
-                    .any(|out| !std::ptr::eq(connection.0.out_node, *out))
-            }) {
-                //iterate a layer of propagation, retaining nodes that dont have all
-                //signals yet.
-                // NOTE: this is useful for
-                //      1. matrix multiplication tensor generation.
-                //      2. recurrent connections only require a small change to node
-                //         retention condition
-                //         and a carry-over signal parameter.
-                //      3. graphing out topology. However this should be a seperate walk iter()
-                //         routine that is encapsulated for here and ranomd_walk
-                buffer = buffer
-                    .iter()
-                    // TODO: hopefully this isnt costly since pre sorted? flat map should flatten
-                    // iteratively preserving order?
-                    .sorted_by_key(|assoc_connection| assoc_connection.0.out_node as *const Node)
-                    .group_by(|assoc_connection| assoc_connection.0.out_node as *const Node)
-                    .into_iter()
-                    .flat_map(|(key, node_assoc_connections)| {
-                        let node_assoc_connections = node_assoc_connections
-                            .map(|connect| (connect.0, connect.1))
-                            .collect::<Vec<(Connection, u8)>>();
-
-                        // retain this node if it is an output node. activate if the out_node
-                        // pointed to by these connections has its number of in_edges fulfilled.
-                        // this condition is also written to short circuit
-                        // TODO: group by object reference to prevent weird indexing out out_node.
-                        if node_assoc_connections.len()
-                            != node_assoc_connections[0].0.out_node.in_edges.get()
-                            || self.outputs.iter().any(|out| std::ptr::eq(key, *out))
-                        {
-                            println!("NODE DELAY");
-                            //node delay routine
-                            node_assoc_connections
-                        } else {
-                            println!("NODE ACTIVATION");
-                            // node normalization and sum routine
-                            Network::activate_nodes(node_assoc_connections)
-                        }
-                    })
-                    .collect();
-                // this is trivial because flatmap just hope and pray this is pre sorted and
-                // sorting algorithm works well with fragmented sort.
-            }
-
-            println!("cycle over returning buffer.. {}", buffer.len());
-            buffer
-                .iter()
-                .sorted_by_key(|assoc_connection| assoc_connection.0.out_node as *const Node)
-                .group_by(|assoc_connection| assoc_connection.0.out_node as *const Node)
-                .into_iter()
-                .map(|(key, node_assoc_connections)| {
-                    let node_assoc_connections = node_assoc_connections
-                        .map(|connect| (connect.0, connect.1))
-                        .collect::<Vec<(Connection, u8)>>();
-                    Network::sum_norm(node_assoc_connections)
-                })
-                .collect::<Vec<u8>>()
-
-            //return buffer.iter().map(|x| x.1).collect();
-        }
+        //TODO: if a new layer is created all residual passthrough connections with the new layers
+        //      cross section must be updated.
+        fn add_split_node(&mut self, input_node: usize, output_node: usize) {}
+        pub fn add_random_connection(&mut self) {}
+        pub fn add_random_split_node(&mut self) {}
+        // forward propagate through the network a vector of signals and return the output vector
+        // of signals.
+        //
+        //Each layer in forward propagation:
+        //layer_widths.pop() == 3 //this layer will have 3 nodes
+        //connections = layer_nodes.take(3)
+        //for connection in connections{
+        //tensor.take(node)//node is the number of connections for this node in this layer.
+        //
+        //        pub fn forward_propagate(&self, signals: Vec<u8>) {
+        //            //-> Vec<u8>
+        //            let mut prev_layer = 0;
+        //            // TODO: consider .chunks() to improve performance (l1 cache size)
+        //            //       this proabaly happens anyways and size of each out_edge should be l1 cache
+        //            self.layers.into_iter().for_each(|layer_width| {
+        //                self.tensor.iter().skip(prev_layer).take(layer_width).iter();
+        //                prev_layer = layer_width
+        //            });
+        //        }
     }
 }

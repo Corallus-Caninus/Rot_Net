@@ -1,42 +1,17 @@
 [package]
 name = "rot_net"
 version = "0.1.0"
-authors = ["joshawathegrate"]
+authors = ["Corralus-Caninus <ward.joshua92@yahoo.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-name = "rotnet"
+name= "psyclones"
 path = "src/lib.rs"
 
-# TODO: use rayon or create custom threading. 
-#       custom threading is likely appropriate 
-#       since this is such a low level feature 
-#       but need to scan os config for core count threading.
 [dependencies]
-#log = "0.4.14"
-timeit= "0.1.2"
-rand= "0.8.3"
-itertools = "0.10.0"
-#mersenne_twister = "1.1.1"
-
-# TODO: code model: small, try to keep jumps local and not use 64 bit addressing if this is the differentiator. DOES THIS LIMIT INLINING?
-#   medium may be advantageous given data ingest. since chunking into u8s this isnt necessarily true.
-# TODO: LTO everything. this requires LLVM frontend/rust backend inlining embed-bytecode
-# TODO: position independant code might be useful for certain routines such as forward prop. This sounds like 
-#       tenserflows static optimization mystery sauce. ropi-rwpi may be good for net ops.
-#TODO: multi pass llvm optimizations
-
-#[build]
-#lto="fat"
-#code-model="small"
-#inline-threshold=9999999
-#opt-level=3
-#codegen-units=1
-
-# BUILT WITH: 
-# NOTE: dont need repetitive inlines..
-#rustflags=["-Copt-level=3", "-Clto=fat", "-Cembed-bitcode=yes", "-Ccode-model=small", "-Crelocation-model=static", "-Ccodegen-units=1", "-Cllvm-args=-inline-threshold=999999999", "--emit=asm", "-Cpasses=aa-eval basic-aa count-aa da  domfrontier domtree instcount intervals iv-users lazy-values libcall-aa lint loops memdep regions scalar-evolution scev-aa targetdata  mergefunc inline simplifycfg loops loop-deletion loop-unroll loop-unroll-and-jam loop-unswitch lower-switch loop-rotate licm reassociate indvars jump-threading loop-simplify lcssa licm argpromotion memdep memcpyopt mem2reg inline bb-vectorize dce deadargelim deadtypeelim die dse globaldce gvn loops loop-deletion loop-unroll loop-unroll-and-jam loop-unswitch lower-switch loop-rotate sink inline inline inline inline inline inline inline"]
-#[term]
-#verbose=true
+rand = "0.8.3"
+# TODO: find a way to graph with debug using plotter (conditional build)
+# TODO: serde for topology serialization etc.
+# TODO: unittests in tests/ directory
+# TODO: benchmarks in benches/ directory
