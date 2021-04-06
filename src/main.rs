@@ -91,7 +91,12 @@ mod tests {
 //}
 fn main() {
     use psyclones::psyclones::rot_net;
+    use psyclones::psyclones::net_index;
     println!("Hello, world!");
-    let rot_net = rot_net::initialize_rot_net(3, 2);
-    println!("rotation network construction complete");
+    let mut rot_net = rot_net::initialize_rot_net(3, 2);//TODO: this isnt correct.
+    let in_node = net_index{layer:0, node:0};
+    let out_node = net_index{layer:0, node:3};
+    rot_net.add_split_node(in_node, out_node);
+
+    println!("rotation network construction complete {}", rot_net);
 }

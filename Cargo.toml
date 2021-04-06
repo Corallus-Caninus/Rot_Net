@@ -11,6 +11,8 @@ path = "src/lib.rs"
 
 [dependencies]
 rand = "0.8.3"
+# serde
+# flate2
 # TODO: find a way to graph with debug using plotter (conditional build)
 # TODO: serde for topology serialization etc.
 # TODO: unittests in tests/ directory
