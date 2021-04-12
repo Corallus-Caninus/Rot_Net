@@ -1,5 +1,6 @@
 //#![feature(box_into_boxed_slice)]
 pub mod psyclones {
+    //TODO: reduce usage of cloned and clone. ensure cache optimal at least with addressing?
     //TODO: macro generic for variable kwargs and generic input types.
     //      same thing for output vector? not as important yet unless easy to implement.
     //TODO: ensure all types T can be discretized into u8. dereference pointers to prevent
@@ -87,6 +88,7 @@ pub mod psyclones {
     }
     ///linearly approximated connection weightings and their derivatives
     pub mod connections {
+        // what the compiler does)
         /// weights a given signal by a connections parameter.
         ///
         /// NOTE: exponential linear approximation has alot of interesting features. 1 point of
@@ -105,6 +107,8 @@ pub mod psyclones {
         /// TODO: may be worth unrolling as bitchecks for some level of permutations
         ///       if optimizations dont occur.
         /// TODO: skip list > comparisons like in cond_rot_act faster than shifting?
+        /// TODO: make residual comparison branchless. 
+        ///       (at least, most/all of this needs to be branchless dont assume 
         /// MSB isnt used so consider u8/2
         /// if param > u8/4{
         /// if param > u8/8{}
@@ -129,7 +133,9 @@ pub mod psyclones {
                 //       isnt wide in the sequence 
                 //       of residual connections and perform weighting at that 
                 //       position. This
-                //       should be done later.
+                //       should be done later. work stealing with rayon may make this performant
+                //       anyways IFF forward prop is written correctly and iterator isnt atomicly
+                //       sequential.
                 signal
             } else if param << 7 == MSB_BITCHECK {
                 //CMP BIT 1
@@ -162,13 +168,11 @@ pub mod psyclones {
                 }
             }
         }
-        //TODO: verify these dont require offsets since >><< 2 
-        //requires values > 128+64
-        //      to be in phase
         //  TODO: sort these bit compares so they align for each function's 
         //  concentric rectangles (read: Polygons)
         //  of intersections so mutations are done sensibly and represent 
-        //  a latent representation
+        //  a latent representation (unused bits for one expression 
+        //  have recessive representation)
         ///approximate an exponential function of variable time constants 
         ///with two lines
         pub fn linear_exponential(param: u8, signal: u8) -> u8 {
@@ -221,10 +225,9 @@ pub mod psyclones {
             }
         }
         //TODO: this isnt really a linear approximation of logarithmic decay. 
-        //Call these
-        //      reflections of exponent and logarithm to make more intuitive 
-        //      its relation to saddle
-        //      function and scaling rectangular intercepts.
+        //      Call these reflections of exponent and logarithm to make more 
+        //      intuitive its relation to saddle function and scaling rectangular 
+        //      intercepts.
         ///approximate a logarithmic decay function (reflected logarithm) with 2 lines
         pub fn linear_decay_logarithm(param: u8, signal: u8) -> u8 {
             const MSB_BITCHECK: u8 = 0b10000000;
@@ -364,8 +367,8 @@ pub mod psyclones {
     }
 
     // TODO: are these intuitive to first time readers?
-    // TODO: consider this for altering self.layers_nodes and self.layer_widths since lots of
-    //       boilerplate index summing.
+    // TODO: can something be extracted to impl of these? 
+    //       May make more readable.
     /// A high level index of a node in the topology.
     #[derive(Clone, Copy)]
     pub struct net_index {
@@ -378,11 +381,12 @@ pub mod psyclones {
         pub index: usize,
         pub length: usize,
     }
-    /// an Artificial Neural Network represented as a flattened tensor of layer wise irregular adjacency
+    /// an Artificial Neural Network represented as a archived tensor of layer wise irregular adjacency
     /// matrices (collumn wise ragged). Uses shifts, conditions and masking to approximate linear functions 
-    /// to improve CPU based Neural Networks and provide a platform for both architecture search given finite
-    /// resources and transfer learning.
+    /// to improve superscalar performance of Artificial Neural Networks and provide a platform for both 
+    /// architecture search given finite resources and transfer learning.
     /// e.g.
+    /// some layer n:
     /// __________
     /// |10|12| 2|
     /// |1 |2 | 3|
@@ -401,7 +405,7 @@ pub mod psyclones {
     /// coefficients.
     /// --fundamentals of computer architecture. How pipelines work, what causes
     /// bubbles/stalls/noops. pipeline stuffing and parallel execution engines. (any author)
-    #[derive(Clone)]
+    #[derive(Clone)] //TODO: where is this called it is potentially very costly.
     pub struct rot_net {
         tensor: Vec<u8>, // a vectorized compact representation of connections
         // NOTE: this is alot of vectors but it keeps parameters 
@@ -410,25 +414,24 @@ pub mod psyclones {
         // in that layer.
         layer_widths: Vec<usize>, //scales with number of layers
         // layer nodes is the chunk size of tensor parameters for each node
-        // in this layer. Each index is a node's connections (a node).
+        // in this layer. Each entry is the number of connections in a node.
         layer_nodes: Vec<usize>, //scales with number of nodes
 
         // NON-ATOMIC ITERATION LOCALS //
         // counter for iteration defaults 0 NOTE: NON-ATOMIC
         layer_counter: usize, 
-        //TODO:
-        // index in self.tensor to reduce round trip summing
+        //TODO: index in self.tensor to reduce round trip summing
         // layer_index: usize,
     }
     // TRAITS //
     // NOTE: using iterators one can implement a custom counting type to address larger than
-    //       architecture's usize such as 127 type but should be considered in conjunction with
-    //       MMX/AVX passes in LLVM. This kind of free runtime feature is awesome!
+    //       architecture's usize such as 127 bit type but should be considered in conjunction with
+    //       MMX/AVX passes in LLVM. This kind of free runtime feature is awesome! I want to be a
+    //       part of this.
     //
-    //TODO: DoubleEndedIterator for backprop
+    // TODO: DoubleEndedIterator for backprop
     ///  iterate this rot_net by each layers connections (parameters) as slices of parameters per
-    ///  node. 
-    ///  inner vectors are row span (in_connections) and entries in vec are column span (nodes)
+    ///  node. inner vectors are row span (in_connections) and entries in vec are column span (nodes)
     ///  of the current layer matrix. This returns value copies and is not for mutation.
     impl Iterator for rot_net {
         type Item = Vec<Box<[u8]>>;
@@ -444,8 +447,10 @@ pub mod psyclones {
                 //      store position in self.tensor at each iteration? layer_count, layer_index?
                 //      just add current layer length to layer index instead of round trip sum each
                 //      time.
+                //  is it possible for the compiler to balance memory and cpu resources with
+                //  automatic memorization using the polyhedral loop model and "source insertion"
+                //  technique?
 
-                // TODO: call get().index otherwise rename
                 // the index coordinates for this layer's nodes
                 // the starting index of the layer
                 let layer_index = self.layer_widths.iter().take(self.layer_counter)
@@ -509,20 +514,15 @@ pub mod psyclones {
     }
     // used for debuging
     // TODO: impl Display for rot_net{} for debugging
+    /// Print out the layer wise structure of the Rot_Net
     impl fmt::Display for rot_net{
         fn fmt(&self, f: &mut fmt::Formatter)->fmt::Result{
             let mut network = self.clone();
             let mut printout = "\n__layer__\n".to_owned();
             printout.push_str("Node Id: [Connections,] \n\n");
 
-            //TODO: @DEPRECATED this is doing too much
-            //printout.push_str(&String::from(format!("layers: {}\n", self.layer_widths.len())));
-            //printout.push_str(&String::from(format!("nodes: {}", self.layer_nodes.len())));
-
 
             network.enumerate().for_each(|(index, layer)|{
-                //TODO: this should printout ragged tensor as it would be expected to be viewed.
-                
                 printout.push_str("\n___");
                 printout.push_str(&String::from(format!("{}", index)));
                 printout.push_str("___\n");
@@ -543,21 +543,29 @@ pub mod psyclones {
     
     // METHODS //
     impl rot_net {
-        ///return the starting index and length of a node's parameters (input connections) in self.tensor
+        ///return the starting index and length of a node's parameters 
+        ///(input connections) in self.tensor given an abstract network index
         fn get(&self, index: net_index) -> node_tensor_index {
             //TODO: BUG layer error here and iterator.
-            let layer_index = self.layer_nodes.iter().take(index.layer).sum();
-
-            let node_index = self.layer_nodes.iter().take(layer_index).sum::<usize>();
+            // where this node is in self.layer_nodes
+            let node_index = self.layer_widths.iter().take(index.layer).sum::<usize>();
+            // where this connection is in self.tensor
+            let index = self.layer_nodes.iter().take(node_index).sum::<usize>();
             
             //TODO: TEST
-            println!("with self.layer_index: {}", self.layer_widths.len());
-            println!("with self.node_index: {}", self.layer_nodes.len()); // these are correct.
+            println!("translating a network index into a tensor archive index..");
+            println!("with self.layer_widths: {}", self.layer_widths.len());
+            println!("with self.layer_nodes: {}", self.layer_nodes.len()); // these are correct.
+            println!("with connections: {}", self.tensor.len()); // these are correct.
+
             println!("with node_index: {}", node_index);
+            println!("with index: {}", index);
+            //TODO: END OF TEST
 
-            let node_length = *self.layer_nodes.iter().skip(node_index).next().unwrap();
+            // the number of connections in this node
+            let connection_length = *self.layer_nodes.iter().skip(index).next().unwrap();
 
-            node_tensor_index{index: node_index, length: node_length}
+            node_tensor_index{index: index, length: connection_length}
         }
         /// rot_net constructor that builds an initial fully connected topology
         pub fn initialize_rot_net(num_inputs: usize, num_outputs: usize) -> Self {
@@ -579,72 +587,82 @@ pub mod psyclones {
                 layer_counter: 0,
             }
         }
-        //TODO: work out marginal index errors here. start logging.
-        ///adds a connection by passing two addresses of positions in the 
-        ///vector. must be acyclic
-        ///(the first layer must be a smaller index than the second).
-        ///This is the fundamental mutation operation for rot_net.
-        ///The connections weight is initialized as random.
+        ///adds a connection by passing two network indices.
+        ///must be acyclic.
+        ///connection weights are initialized as random.
         pub fn add_connection(&mut self, input_node: net_index, output_node: net_index) {
             // TODO: need to check MSB of connection when performing add_node to 
-            //       ensure it is not a residual connection.
+            //       ensure it is not a residual connection. Can only assert here
             // NOTE: shouldnt need output_node otherwise since nodes are 
             //      positionally indexed wrt input connections.
             println!("adding connection with output layer: {} and input layer: {}", output_node.layer, 
                 input_node.layer);
-            //TODO: this is not the right solution need to rework initial topology data structure
-            let mut intermediate_layers = 0;
-            if output_node.layer !=0 && input_node.layer != 0{
-                intermediate_layers = output_node.layer - input_node.layer;
-                debug_assert!(intermediate_layers > 0); 
-            }
+            let intermediate_layers = output_node.layer - input_node.layer;
+            println!("intermediate layers: {}", intermediate_layers);
             // cycles are not allowed this assertion should be wrapped away
+            debug_assert!(intermediate_layers >= 0); 
 
+            // create a non-residual connection parameter
             let mut rng = rand::thread_rng();
-
-            // 1. mutate previous layer, add the in_connection to this layer.
-            // parameters are represented by incoming connections to nodes so 
-            // we add to output_node here.
-            let new_connection = rng.gen();
+            let new_connection = rng.gen::<u8>() & 0b01111111;
             
-            //TODO: this may cause logic bug with loop connection error
-            if intermediate_layers == 1  || intermediate_layers == 0{
-                // 2. add a new connection to the node by inserting in previous layer
-                //    since layers are defined as connections going into nodes.
-                // NOTE: these have to be done together to preserve index in 
-                //       self.tensor so consider refactoring
-                println!("ADDING CONNECTION");
-                println!("before: {:?} layers: {:?} nodes: {:?}", self.tensor, self.layer_widths, self.layer_nodes);
-                //TODO: inserting incorrectly here wrt nodes and layers
-                self.tensor.insert(self.get(output_node).index, new_connection);
-                let prev_value = self.layer_nodes.remove(input_node.node);
-                self.layer_nodes.insert(input_node.node, prev_value+1);
-                println!("after: {:?} layers: {:?} nodes: {:?}", self.tensor, self.layer_widths, self.layer_nodes);
-            } else {
-                // 3. add residual connections for all cross-sectional edges of 
-                //    the new layer if multiple intermediate layers exist.
-                // TODO: this should always create nodes (which cannot be selected)
-                // TODO: how is the last residual connection indicated such that it is used in
-                // forward_prop. should set last connection in series to be actual connection.
-                let tensor_node = self.get(input_node).index;
-                //iterate up to one less since last layer has actual connection others just 
-                //pass signal.
-                for layer in input_node.layer..output_node.layer - 1{
-                    let residual_connection = 0b10000000;
-                    self.tensor.insert(self.get(output_node).index+intermediate_layers, 
-                        residual_connection);
-                    //update the layer_width and layer_nodes for the new residual
-                    //connection
-                    self.layer_widths[layer+1] += 1;
-                    self.layer_nodes[self.layer_widths.iter().take(layer).sum::<usize>()] +=1;
-                    //
-                    //@DEPRECATED. why cant I mut by value using iterators? :(
-                    //self.layer_widths.iter_mut().skip(input_node.layer+layer).next().unwrap()+=1;
-                    //self.layer_nodes.iter().skip(input_node.layer).next()+=1;
+            // add residual connections for all cross-sectional edges of 
+            // the new layer if multiple intermediate layers exist.
+            // iterate up to one less since last layer has actual connection
+            // add a phantom node for each layer that cross sects (traces) the 
+            // residual connection up to the actual connection.
+            //a phantom node always exists for all layers except the fully connected initial
+            //layer. find the phantom node.
+            const residual_connection: u8 = 0b10000000;
+            for layer in input_node.layer..output_node.layer - 1{
+                //update the layer_nodes for the new residual connection
+                let layer_start = self.layer_widths.iter().take(layer).sum::<usize>();
+                let layer_length = self.layer_widths.iter().skip(layer_start).next().unwrap();
+
+                let node_start = self.layer_nodes.iter().take(layer_start).sum::<usize>();
+                let node_length = self.layer_nodes.iter().skip(layer_start).next().unwrap().clone();
+
+                let layer_connections = self.tensor.iter().skip(node_start).take(node_length)
+                    .collect::<Vec<&u8>>();
+
+                let mut phantom_node_index = layer_connections.iter().enumerate()
+                    .filter(|x| **x.1 == 0b10000000)
+                    .map(|x| x.0).collect::<Vec<usize>>();
+                phantom_node_index.sort();
+                // the location of the first connection index of the phantom node
+                let phantom_node_index = phantom_node_index[0];
+
+                //update layer_node connection count for the phantom_node
+                let mut phantom_index = layer_start;
+                let mut cur_connection_index = 0;
+                for node in self.layer_nodes.iter().skip(layer_start){
+                    if cur_connection_index == phantom_node_index{
+                        // this node is this layers phantom_node 
+                        break;
+                    }
+                    // sum the connection count for each node until we
+                    // reach the phantom node's connection index
+                    cur_connection_index += node;
+                    phantom_index += 1;
                 }
-                // add the new connection at the end of the residual connections
-                self.tensor.insert(self.get(output_node).index+intermediate_layers, new_connection);
+                let mut prev_phantom_value = self.layer_nodes.remove(phantom_index);
+                prev_phantom_value += 1;
+                self.layer_nodes.insert(phantom_index, prev_phantom_value);
+                
+                //insert residual_connection in phantom_node
+                self.tensor.insert(self.get(output_node).index+intermediate_layers, 
+                    residual_connection);
             }
+            // add the new connection at the end of the residual connection trace
+            // TODO: need to update node connection value for this node.
+            // TODO: extract these into method during post-test and debug refactor.
+            // TODO: automatic refactoring would be awesome implementation of GPT3
+            let node_index = self.layer_widths.iter().take(output_node.layer).sum::<usize>();
+
+            let prev_node_connections = self.layer_nodes.remove(node_index);
+            let node_connections = prev_node_connections + 1;
+            self.layer_nodes.insert(node_index, node_connections);
+            self.tensor.insert(self.get(output_node).index+intermediate_layers, new_connection);
         }
         //TODO: if a new layer is created all residual passthrough connections 
         //      with the new layers cross section must be updated.
@@ -659,40 +677,85 @@ pub mod psyclones {
             //      how can connections be used to ensure always acyclic? pass in node_tensor_index
             //      with a sub index for connection and split accordingly?
             let mut rng = rand::thread_rng();
+            println!("--NODE CREATION ROUTINE:");
 
             let intermediate_layers = input_node.layer - output_node.layer;
 
-            //TODO: cannot allow these to be residual! do a bitmask
-            let in_connection = rng.gen::<u8>();
-            let out_connection = rng.gen::<u8>();
-            //create a new layer
+            // generate a random non-residual connection
+            let in_connection = rng.gen::<u8>()  & 0b01111111;
+            let out_connection = rng.gen::<u8>() & 0b01111111;
+            // create a new layer
             // increment index for self.layer_widths to fill later insertion gap.
             let new_node = net_index{layer: input_node.layer+1,node: 1};
 
             //determine if this node defines a new layer.
-            if intermediate_layers == 0{
-                println!("adding normal split_node with node id: {}", new_node.node);
+            if intermediate_layers == 0 {
+                println!("creating a new layer for this node..");
                 // this node is a new layer
-                // TODO: insert shifts right and causes a throw in add_connection..
-                //      should be able to insert at the end (effectively a push)
-                self.layer_widths.insert(input_node.layer + 1, 1);
-                //TODO: bug here because expecting this to be done in add_connection
-                self.layer_nodes.insert(input_node.node + 1, 0); 
+                //TODO: this layer requires the same length as the previous layer
+                //self.layer_widths.insert(input_node.layer + 1, 1);
+                //TODO: node's out_connection isnt placed in new layer
+                //self.layer_nodes.insert(input_node.node + 1, 0); 
+
+                //LAYER CREATION ROUTINE
+                // TODO: all connections in the split connection's layer must now have 
+                //      a layer of residual connections.
+                //      This is part of a layer creation routine and can be encapsulated here.
+                //TODO: copy insertion layer and bitflip to residual connection
+                // get all connections in current layer
+                
+                // TODO: there is an extractable method here..
+                // layer index
+                let layer = self.layer_widths.iter().take(input_node.layer).sum::<usize>();
+                // tensor index
+                let layer_start = self.layer_nodes.iter().take(layer).sum::<usize>();
+                let layer_nodes = self.layer_nodes.iter().skip(layer).next().unwrap().clone();
+                // tensor slice
+                let tensor_slice = self.tensor.iter().skip(layer_start).take(layer_nodes);
+                let tensor_length = tensor_slice.len();
+                // now call add_connection but with residual connections for all tensor_length
+                let residual_tensor_length = [0..tensor_length];
+                residual_tensor_length.iter().enumerate().for_each(|(index, connection)| {
+                    let param = 0b10000000 as u8;
+                    self.tensor.insert(layer_start + index, param);
+                });
+                self.layer_widths.insert(layer_start, 1); //new layer is now created
+                // residual nodes are normal nodes but created with only residual connections
+                // and filtered in add_node and add_connection mutations so they remain residual
+                // until depleted from add_split_node operations on their layer.
+                self.layer_nodes.insert(layer, tensor_length); //add residual connections
+                // add number of phantom nodes for residual connections
+                // residual connections are removed in layer existing condition and created in new
+                // layer condition since node additions are the only way to change a residual
+                // connection.
+                //  TODO: Can represent all residual connections with residual nodes 
+                //     (connection length 0) and search for residual nodes when creating a new node. If
+                //     intermediate_layers > 0 && some node has length 0 remove a residual
+                //     connection at that node and create a new node in that layer else perform
+                //     this routine.
+                //        
+                // END OF LAYER CREATION ROUTINE
+                
+                //add input connection to split node
                 self.add_connection(input_node, new_node);
+                //add output connection to split node
                 self.add_connection(new_node, output_node);
             }else {
-                println!("processing residual layer..");
+                println!("processing existing layer..");
                 // a layer already exists for this node. 
-                // insert new node into the last layer between these two nodes
-                // increment the earliest_layer's node count
+                // insert new node in the layer between these two nodes
+                // increment the layers node count
                 let mut insertion_layer = self.layer_widths.remove(output_node.layer);
+                //increase node count for this layer
                 insertion_layer += 1;
                 self.layer_widths.insert(output_node.layer, insertion_layer);
                 let cur_node_index = self.layer_widths.iter().take(output_node.layer).sum::<usize>();
                 self.layer_nodes.insert(cur_node_index, 0);//connections will initialize the node
+
                 self.add_connection(input_node, new_node);
                 self.add_connection(output_node, new_node);
             }
+            println!("--NODE CREATION COMPLETE.");
         }
         //pub fn add_random_connection(&mut self) {
             //TODO: just call add_connection with two random samples 
@@ -703,9 +766,6 @@ pub mod psyclones {
             // TODO: need a way to check connections in ragged matrix and
             //       through residual connections in tensor of ragged matrix
         //}
-        // TODO: make residual comparison branchless. 
-        // (at least, most/all of this needs to be branchless dont assume 
-        // what the compiler does)
         //pub fn forward_propagate(){}
         // forward propagate through the network a vector of signals 
         // and return the output vector of signals.
@@ -729,11 +789,6 @@ pub mod psyclones {
         //                prev_layer = layer_width
         //            });
         //        }
-        //
-        // TODO: can a population gradient be performed for parameters instead of population?
-        //       fitness of changing a value sets point mutation rate? This is only useful if
-        //       parameters/activation cannot be derived.
-        //
         //
         //
         //pub fn stochastic_back_propagate(){}
@@ -804,5 +859,16 @@ pub mod psyclones {
         //     structure since at
         //     least usize innovation per parameter. This is only useful if not 
         //     doing backprop search.
+        //
+        //  TODO: initialize with limitation parameters as configuration consts.
+        //        force usize to be maximum connection per node and maximum network size in search.
+        //  TODO: PoM will also be limited by this but use agglomerative clustering to shrink the
+        //  RoM when some threshold of PoMs is reached. This allows continuous exploring of the RoM until
+        //  some equillibrium RoM representation is reached for a given search distance. varying
+        //  the search distance over time such as epsilon decay or proportional epsilon for PoM 
+        //  count may be interesting. The goal is that this will be as robust as SARSA but with
+        //  some compression through learning. Knowledge based compression as well as mapping 
+        //  the model and not the specific domain allows scale out to transfer learning across 
+        //  domains and ranges (e.g.: sensors and fitness functions).
     }
 }
