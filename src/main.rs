@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod tests {
     use psyclones::psyclones::activations::*;
-    use psyclones::psyclones::connections::*;
+    use psyclones::psyclones::weights::*;
     //TODO: assert somehow? assert continuous?
     #[test]
     pub fn test_weights() {
@@ -30,7 +30,11 @@ mod tests {
         for slope in &slopes {
             println!("IN LINEAR_EXPONENTIAL ON SLOPE: {}", count);
             for i in 0..255 {
-                println!("x = {}, y = {}", i as u8, linear_exponential(*slope, i));
+                println!(
+                    "x = {}, y = {}",
+                    i as u8,
+                    linear_exponential(*slope, i)
+                );
             }
             count += 1;
         }
@@ -40,7 +44,11 @@ mod tests {
         for slope in &slopes {
             println!("IN LINEAR_DECAY_LOGARITHM ON SLOPE: {}", count);
             for i in 0..255 {
-                println!("x = {}, y = {}", i as u8, linear_decay_logarithm(*slope, i));
+                println!(
+                    "x = {}, y = {}",
+                    i as u8,
+                    linear_decay_logarithm(*slope, i)
+                );
             }
             count += 1;
         }
@@ -50,7 +58,11 @@ mod tests {
         for slope in &slopes {
             println!("IN LINEAR_LOGARITHM ON SLOPE: {}", count);
             for i in 0..255 {
-                println!("x = {}, y = {}", i as u8, linear_logarithm(*slope, i));
+                println!(
+                    "x = {}, y = {}",
+                    i as u8,
+                    linear_logarithm(*slope, i)
+                );
             }
             count += 1;
         }
@@ -58,7 +70,10 @@ mod tests {
         println!("~LINEAR DECAY EXPONENTIAL~");
         let mut count = 0;
         for slope in &slopes {
-            println!("IN LINEAR_DECAY_EXPONENTIAL ON SLOPE: {}", count);
+            println!(
+                "IN LINEAR_DECAY_EXPONENTIAL ON SLOPE: {}",
+                count
+            );
             for i in 0..255 {
                 println!(
                     "x = {}, y = {}",
@@ -74,8 +89,8 @@ mod tests {
 //#[test]
 //pub fn linear_decay_logarithm() {
 //    for i in 0..255 {
-//        println!("x = {}, y = {}", i as u8, linear_decay_logarithm(i));
-//    }
+//        println!("x = {}, y = {}", i as u8,
+// linear_decay_logarithm(i));    }
 //}
 //#[test]
 //pub fn test_cond_rot_act() {
@@ -91,12 +106,21 @@ mod tests {
 //}
 fn main() {
     use psyclones::psyclones::rot_net;
-    use psyclones::psyclones::net_index;
     println!("Hello, world!");
-    let mut rot_net = rot_net::initialize_rot_net(3, 2);//TODO: this isnt correct.
-    let in_node = net_index{layer:0, node:0};
-    let out_node = net_index{layer:0, node:3};
-    rot_net.add_split_node(in_node, out_node);
+    let mut rot_net = rot_net::initialize_network(3, 2);
+    rot_net.add_node(2, 0, rot_net.tensor.len());
+    println!("with new node: {}", rot_net);
 
-    println!("rotation network construction complete {}", rot_net);
+    //TODO: support recurrent connections
+    //rot_net.add_connection(4, 4);
+    //println!("with new connection {}", rot_net);
+
+    let signals = vec![127, 127, 127];
+    let output_signals = rot_net.forward_propagate(signals.clone());
+    // NOTE: initial nodeIds are out of order
+    println!(
+        "forward propagating {:?} returned {:?}",
+        signals.clone(),
+        output_signals
+    );
 }
