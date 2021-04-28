@@ -436,7 +436,7 @@ pub mod psyclones {
 
     // NETWORK PARAMETERS //
     /// an edge in the network graph
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct connection {
         // the ID of the node this connection goes to.
         output_node: usize,
@@ -674,122 +674,161 @@ pub mod psyclones {
                 .collect::<Vec<(&node, u8)>>();
 
             println!(
-                "FORWARD_PROP initialized: {:?}",
+                "FORWARD_PROP initialized: {:?}\n",
                 initialization
             );
 
-            // perform the initial activation broadcast
+            // perform the initial broadcast (without activation)
             let mut buffer = initialization
                 .iter()
-                .flat_map(|node| {
-                    // TODO: move?
-                    node.0.connections.iter().map(
-                        move |next_connection| {
-                            (
-                                next_connection,
-                                weights::weight(
-                                    node.1,
-                                    next_connection.param,
-                                ),
-                            )
-                        },
+                .map(|node| (node.0, vec![(node.0.id, node.1)]))
+                .map(|node| self.activate_node(node, true))
+                .flatten()
+                .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
+
+            println!(
+                "FORWARD_PROP ready with buffer: {:?}\n",
+                buffer
+            );
+            // resort into node groups
+            buffer = buffer
+                .iter()
+                .group_by(|node| node.0)
+                .into_iter()
+                .map(|(key, group)| {
+                    // collapse into one node
+                    (
+                        key,
+                        group
+                            .into_iter()
+                            .map(|node| node.1.clone())
+                            .flatten()
+                            .collect::<Vec<(usize, u8)>>(),
                     )
                 })
-                .collect::<Vec<(&connection, u8)>>();
+                .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
-            println!("FORWARD_PROP ready with buffer: {:?}", buffer);
+            println!(
+                "FORWARD_PROP sorted with buffer: {:?}\n",
+                buffer
+            );
 
+            // performs sum-normalize, activation, and next_node weighting per iteration
+            // to maximize operations per address indirection and ready_node lookup
             let mut next_buffer = buffer.clone();
-            while next_buffer.len() > 0 {
+            // NOTE: do while()
+            loop {
                 buffer = next_buffer.clone();
-                // get nodes ready to propagate
-                let ready_node_connections = buffer
+                // NOTE: avoiding group_by allows for more layer parallellization
+                next_buffer = buffer
                     .iter()
-                    .filter(|node_connection| {
-                        let node_inputs = self.get_in_connections(
-                            node_connection.0.output_node,
-                        );
-                        node_inputs.iter().all(|inputs| {
-                            buffer.iter().any(|buffer_node| {
-                                buffer_node.0.output_node
-                                    == inputs.output_node
-                            })
-                        })
+                    .map(|node| {
+                        self.activate_node(node.clone(), false)
                     })
-                    .collect::<Vec<&(&connection, u8)>>();
+                    .flatten()
+                    .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
-                println!(
-                    "FORWARD_PROP ITL ready with: {:?}",
-                    ready_node_connections
-                );
-
-                // get nodes that arent propagatable yet
-                let halted_node_connections = buffer
+                // resort into node groups
+                next_buffer = next_buffer
                     .iter()
-                    .filter(|node| {
-                        !ready_node_connections.iter().any(|ready| {
-                            std::ptr::eq(node.0, ready.0)
-                        })
-                    })
-                    .collect::<Vec<&(&connection, u8)>>();
-
-                println!(
-                    "FORWARD_PROP halting nodes: {:?}",
-                    halted_node_connections
-                );
-
-                // the nodes propagated from
-                // ready_node_connections
-                let propagated_node_connections =
-                    ready_node_connections
-                        .into_iter()
-                        .group_by(|ready_connection| {
-                            ready_connection.0.output_node
-                        })
-                        .into_iter()
-                        .map(|(key, connections)| {
-                            // broadcast the ready_nodes
-                            let output_node = self.get_node(key);
-
-                            let broadcast_signal = connections
+                    .group_by(|node| node.0)
+                    .into_iter()
+                    .map(|(key, group)| {
+                        // collapse into one node
+                        (
+                            key,
+                            group
                                 .into_iter()
-                                .map(|connection| {
-                                    weights::weight(
-                                        connection.1,
-                                        connection.0.param,
-                                    )
-                                })
-                                .fold(0, |acc, res| {
-                                    //TODO: does shift need
-                                    // distribution
-                                    // to be associative?
-                                    (acc + res) >> 1
-                                });
-                            output_node
-                                .connections
-                                .iter()
-                                .map(|next_connection| {
-                                    (
-                                        next_connection,
-                                        broadcast_signal,
-                                    )
-                                })
-                                .collect::<Vec<(&connection, u8)>>()
-                        })
-                        // TODO: flattening loses some
-                        // grouping information
-                        .flatten()
-                        .collect::<Vec<(&connection, u8)>>();
+                                .map(|node| node.1.clone())
+                                .flatten()
+                                .collect::<Vec<(usize, u8)>>(),
+                        )
+                    })
+                    .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
-                next_buffer = propagated_node_connections
+                // break the loop if all entries in buffer are the output vector halt
+                if next_buffer
                     .iter()
-                    .chain(halted_node_connections.into_iter())
-                    .cloned()
-                    .collect::<Vec<(&connection, u8)>>();
+                    .all(|node| node.0.connections.len() == 0)
+                {
+                    break;
+                }
             }
 
+            println!("RAW FINISH BUFFER: {:?}", buffer);
             // append the solution buffer
-            buffer.iter().map(|node| node.1).collect()
+            buffer
+                .iter()
+                .map(|node| {
+                    node.1.iter().map(|connection| connection.1)
+                })
+                .flatten()
+                .collect()
+        }
+
+        // TODO: this should read "self lives longer than references to nodes"
+        /// activate a node, returning all output nodes with their signals
+        fn activate_node<'a, 'b: 'a>(
+            &'b self,
+            node: (&'a node, Vec<(usize, u8)>),
+            initial: bool,
+        ) -> Vec<(&'a node, Vec<(usize, u8)>)> {
+            let ready = self.node_ready_comparator(node.0, &node.1);
+            // ensure an output node isnt activated during hidden layer propagation
+            if (ready || initial) && node.0.connections.len() > 0 {
+                println!("node {:?} is ready", node);
+                // normalize-sum and broadcast output_connections
+                let broadcast_signal = activations::cond_rot_act(
+                    node.1
+                        .iter()
+                        .fold(0, |res, acc| (res + acc.1) >> 1),
+                );
+                // weight the next_nodes and return the node buffer object
+                node.0
+                    .connections
+                    .iter()
+                    .map(|output_connection| {
+                        let next_node = self
+                            .get_node(output_connection.output_node);
+                        (
+                            self.get_node(
+                                output_connection.output_node,
+                            ),
+                            next_node
+                                .connections
+                                .iter()
+                                .map(|connection_param| {
+                                    (
+                                        connection_param.output_node,
+                                        weights::weight(
+                                            broadcast_signal,
+                                            connection_param.param,
+                                        ),
+                                    )
+                                })
+                                .collect::<Vec<(usize, u8)>>(),
+                        )
+                    })
+                    .collect::<Vec<(&node, Vec<(usize, u8)>)>>()
+            } else {
+                println!("node {:?} is not ready", node);
+                // halt this node by returning the current value
+                vec![node]
+            }
+        }
+        /// used for forward_propagation:
+        /// check if a node is ready to broadcast by its
+        /// nodeid and connections in the buffer
+        pub fn node_ready_comparator(
+            &self,
+            node: &node,
+            cur_in_connections: &Vec<(usize, u8)>,
+        ) -> bool {
+            // all in_connections for this node
+            let in_connections = self.get_in_connections(node.id);
+
+            // do we have all the in_connections?
+            in_connections.len() == cur_in_connections.len()
         }
     }
 
