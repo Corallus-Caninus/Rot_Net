@@ -505,6 +505,8 @@ pub mod psyclones {
                      // costly.
     pub struct rot_net {
         pub tensor: Vec<node>,
+        // the output node id's
+        pub outputs: Vec<usize>,
     }
     // METHODS //
     impl rot_net {
@@ -541,14 +543,19 @@ pub mod psyclones {
             // add the output connections one time
             // TODO: rework this order of operations for
             // readability
+            let mut output_vector = vec![];
             for output in 0..outputs {
                 let mut new_node = node {
                     id: output,
                     connections: vec![],
                 };
                 tensor.push(new_node);
+                output_vector.push(output);
             }
-            rot_net { tensor: tensor }
+            rot_net {
+                tensor: tensor,
+                outputs: output_vector,
+            }
         }
         // TODO: make this (also?) immutable for parallelization
         /// returns a mutable reference to a node in the
@@ -658,7 +665,7 @@ pub mod psyclones {
         /// input node there should be one signal
         /// per input node.
         pub fn forward_propagate(&self, signals: Vec<u8>) -> Vec<u8> {
-            //TODO: assert vector
+            // TODO: assert vector
             // dimensions are appropriate for this
             // network: self.input_nodes.len == signals.len
             // TODO: remove .clone, .cloned and .collect
@@ -678,11 +685,30 @@ pub mod psyclones {
                 initialization
             );
 
+            // TODO: rework to have buffer entries be (nodeid, Vec<input_connections, signals>)
+            //       stop when all nodeids are output nodes and perform one last sum outside
+            //       loop then return. dont overthink it.
+
             // perform the initial broadcast (without activation)
             let mut buffer = initialization
                 .iter()
-                .map(|node| (node.0, vec![(node.0.id, node.1)]))
-                .map(|node| self.activate_node(node, true))
+                // TODO: this is supposed to be output_connection.output_node node node.0.id
+                .map(|node| {
+                    //(node.0, vec![(node.0.id, node.1)])
+                    node.0.connections.iter().map(
+                        move |connection_param| {
+                            (
+                                self.get_node(
+                                    connection_param.output_node,
+                                ),
+                                vec![(
+                                    connection_param.output_node,
+                                    node.1,
+                                )],
+                            )
+                        },
+                    )
+                })
                 .flatten()
                 .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
@@ -722,9 +748,7 @@ pub mod psyclones {
                 // NOTE: avoiding group_by allows for more layer parallellization
                 next_buffer = buffer
                     .iter()
-                    .map(|node| {
-                        self.activate_node(node.clone(), false)
-                    })
+                    .map(|node| self.activate_node(node.clone()))
                     .flatten()
                     .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
@@ -764,6 +788,7 @@ pub mod psyclones {
                 })
                 .flatten()
                 .collect()
+            // TODO: activate one last time
         }
 
         // TODO: this should read "self lives longer than references to nodes"
@@ -771,11 +796,10 @@ pub mod psyclones {
         fn activate_node<'a, 'b: 'a>(
             &'b self,
             node: (&'a node, Vec<(usize, u8)>),
-            initial: bool,
         ) -> Vec<(&'a node, Vec<(usize, u8)>)> {
             let ready = self.node_ready_comparator(node.0, &node.1);
             // ensure an output node isnt activated during hidden layer propagation
-            if (ready || initial) && node.0.connections.len() > 0 {
+            if ready && node.0.connections.len() > 0 {
                 println!("node {:?} is ready", node);
                 // normalize-sum and broadcast output_connections
                 let broadcast_signal = activations::cond_rot_act(
@@ -811,7 +835,7 @@ pub mod psyclones {
                     })
                     .collect::<Vec<(&node, Vec<(usize, u8)>)>>()
             } else {
-                println!("node {:?} is not ready", node);
+                //println!("node {:?} is not ready", node);
                 // halt this node by returning the current value
                 vec![node]
             }
@@ -828,6 +852,7 @@ pub mod psyclones {
             let in_connections = self.get_in_connections(node.id);
 
             // do we have all the in_connections?
+            // TODO: halt connections that lead to an output connection
             in_connections.len() == cur_in_connections.len()
         }
     }
