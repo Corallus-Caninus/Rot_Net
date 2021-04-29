@@ -836,7 +836,10 @@ pub mod psyclones {
                                 )
                             })
                             .flatten()
-                            .fold(0, |acc, res| (acc + res) >> 1),
+                            // TODO: is this associative/parallelizable? me thinks no
+                            .fold(0, |acc, res| {
+                                (acc >> 1) + (res >> 1)
+                            }),
                     )
                 })
                 .collect()

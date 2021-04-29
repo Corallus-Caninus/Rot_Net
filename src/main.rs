@@ -112,25 +112,25 @@ fn main() {
     let mut rng = rand::thread_rng();
 
     println!("Hello, world!");
-    let mut rot_net = rot_net::initialize_network(3, 2);
-    rot_net.add_node(2, 0, rot_net.tensor.len());
+    let mut rot_net = rot_net::initialize_network(3, 4);
+    rot_net.add_node(4, 0, rot_net.tensor.len());
     println!("with new node: {}", rot_net);
     rot_net.add_node(5, 0, rot_net.tensor.len());
     println!("with new node: {}", rot_net);
-    rot_net.add_node(3, 0, rot_net.tensor.len());
+    rot_net.add_node(7, 0, rot_net.tensor.len());
     println!("with new node: {}", rot_net);
 
-    rot_net.add_connection(2, 7);
-    println!("with new node: {}", rot_net);
+    //rot_net.add_connection(2, 7);
+    //println!("with new node: {}", rot_net);
     //TODO: support recurrent connections
     //rot_net.add_connection(4, 4);
     //println!("with new connection {}", rot_net);
 
     for i in 0..100000 {
         let signals = vec![
-            rng.gen::<u8>() & 0b01111111,
-            rng.gen::<u8>() & 0b01111111,
-            rng.gen::<u8>() & 0b01111111,
+            rng.gen::<u8>() ,
+            rng.gen::<u8>() ,
+            rng.gen::<u8>() ,
         ];
         let output_signals =
             rot_net.forward_propagate(signals.clone());
