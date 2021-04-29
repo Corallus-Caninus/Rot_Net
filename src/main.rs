@@ -110,6 +110,8 @@ fn main() {
     let mut rot_net = rot_net::initialize_network(3, 2);
     rot_net.add_node(2, 0, rot_net.tensor.len());
     println!("with new node: {}", rot_net);
+    rot_net.add_node(5, 0, rot_net.tensor.len());
+    println!("with new node: {}", rot_net);
 
     //TODO: support recurrent connections
     //rot_net.add_connection(4, 4);

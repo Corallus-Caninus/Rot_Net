@@ -447,6 +447,7 @@ pub mod psyclones {
     #[derive(Clone, Debug)]
     pub struct node {
         // the ID of this node
+        // NOTE: would prefer for this to be an address of a connection vector but is too dynamic
         id: usize,
         // the connections going out from this node
         connections: Vec<connection>,
@@ -742,53 +743,107 @@ pub mod psyclones {
             // performs sum-normalize, activation, and next_node weighting per iteration
             // to maximize operations per address indirection and ready_node lookup
             let mut next_buffer = buffer.clone();
-            // NOTE: do while()
-            loop {
-                buffer = next_buffer.clone();
-                // NOTE: avoiding group_by allows for more layer parallellization
-                next_buffer = buffer
-                    .iter()
-                    .map(|node| self.activate_node(node.clone()))
+            // short circuiting loop condition
+            while !buffer.iter().all(|node| {
+                self.outputs.iter().any(|output| node.0.id == *output)
+            }) {
+                println!("BUFFER: {:?}\n", buffer);
+                next_buffer = buffer.clone();
+
+                // NOTE: this is actually really good for hoisting from for loop
+                //       iff vec macro initializes allocation here
+                let mut ready_nodes = vec![];
+                let mut halted_nodes = vec![];
+
+                // check if nodes are ready to propagate
+                // TODO: can/should this be integrated to lazy op?
+                for node in next_buffer.iter() {
+                    if self.node_ready_comparator(node.0, &node.1) {
+                        //println!("preparing node {}", node.0.id);
+                        ready_nodes.push(node.to_owned());
+                    } else {
+                        halted_nodes.push(node.to_owned());
+                    }
+                }
+                println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
+
+                // propagate ready nodes
+                ready_nodes = ready_nodes.iter()
+                    .inspect(|activation| println!("activating: {:?}",activation))
+                    .map(|node| {
+                        // get the broadcast signal from this node
+                        let broadcast_signal = activations::cond_rot_act(node.1.iter().fold(0,|res,acc|{
+                            (res + acc.1) >> 1
+                        }));
+                        node.0.connections.iter().map(|out_connection|{
+                            (self.get_node(out_connection.output_node),vec![(out_connection.output_node, broadcast_signal)])
+                        }).collect::<Vec<(&node, Vec<(usize, u8)>)>>()
+                    })
                     .flatten()
+                    // TODO: chain and link the next operation for one lazy layer operation
                     .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
-                // resort into node groups
-                next_buffer = next_buffer
+                println!(
+                    "grouping {:?} node-connections",
+                    ready_nodes
+                );
+                // TODO: this doesnt group correctly
+                next_buffer = ready_nodes
+                    // TODO: lazy this dont collect
                     .iter()
-                    .group_by(|node| node.0)
+                    // add halted nodes
+                    .chain(halted_nodes.iter())
+                    .sorted_by(|node_a, node_b| {
+                        Ord::cmp(&node_a.0.id, &node_b.0.id)
+                    })
+                    .group_by(|node| node.0.id)
                     .into_iter()
+                    .inspect(|node| {
+                        println!("GROUPING: {:?}", node.0)
+                    })
                     .map(|(key, group)| {
-                        // collapse into one node
                         (
-                            key,
+                            self.get_node(key),
                             group
                                 .into_iter()
-                                .map(|node| node.1.clone())
+                                .map(|group_node| {
+                                    group_node.1.clone()
+                                })
                                 .flatten()
                                 .collect::<Vec<(usize, u8)>>(),
                         )
                     })
                     .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
-
-                // break the loop if all entries in buffer are the output vector halt
-                if next_buffer
-                    .iter()
-                    .all(|node| node.0.connections.len() == 0)
-                {
-                    break;
-                }
+                buffer = next_buffer.clone();
+                //println!("BROADCAST RESULT: {:?} nodes and {:?} previously halted nodes", ready_nodes, halted_nodes);
             }
 
-            println!("RAW FINISH BUFFER: {:?}", buffer);
-            // append the solution buffer
-            buffer
+            println!("RAW FINISH BUFFER: {:?}", next_buffer);
+
+            // now sum-normalize and activate the output vector
+            next_buffer
                 .iter()
-                .map(|node| {
-                    node.1.iter().map(|connection| connection.1)
+                .sorted_by(|node_a, node_b| {
+                    Ord::cmp(node_a.0, node_b.0)
                 })
-                .flatten()
+                .group_by(|node| node.0)
+                .into_iter()
+                .map(|(_key, group)| {
+                    activations::cond_rot_act(
+                        group
+                            .into_iter()
+                            .map(|node| {
+                                node.1.iter().map(
+                                    |connection_signal| {
+                                        connection_signal.1
+                                    },
+                                )
+                            })
+                            .flatten()
+                            .fold(0, |acc, res| (acc + res) >> 1),
+                    )
+                })
                 .collect()
-            // TODO: activate one last time
         }
 
         // TODO: this should read "self lives longer than references to nodes"
@@ -840,9 +895,13 @@ pub mod psyclones {
                 vec![node]
             }
         }
-        /// used for forward_propagation:
-        /// check if a node is ready to broadcast by its
-        /// nodeid and connections in the buffer
+
+        /// check if all connections for a
+        /// node exist in a (connection,signal) buffer
+        ///
+        /// cur_in_connections: current in connections in a buffer
+        ///                     including this nodes in connections
+        /// node: the node being compared.
         pub fn node_ready_comparator(
             &self,
             node: &node,
@@ -851,9 +910,11 @@ pub mod psyclones {
             // all in_connections for this node
             let in_connections = self.get_in_connections(node.id);
 
-            // do we have all the in_connections?
-            // TODO: halt connections that lead to an output connection
-            in_connections.len() == cur_in_connections.len()
+            let is_output =
+                self.outputs.iter().any(|output| *output == node.id);
+
+            (in_connections.len() == cur_in_connections.len())
+                && !is_output
         }
     }
 
