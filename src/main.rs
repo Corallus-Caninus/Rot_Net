@@ -2,6 +2,9 @@
 //TODO: unittest activations::cond_rot_act
 //TODO: unittest activations::cond_rot_grad
 //TODO: unittest connections::weight
+#[macro_use]
+extern crate timeit;
+use rand::*;
 
 #[cfg(test)]
 mod tests {
@@ -106,23 +109,44 @@ mod tests {
 //}
 fn main() {
     use psyclones::psyclones::rot_net;
+    let mut rng = rand::thread_rng();
+
     println!("Hello, world!");
     let mut rot_net = rot_net::initialize_network(3, 2);
     rot_net.add_node(2, 0, rot_net.tensor.len());
     println!("with new node: {}", rot_net);
     rot_net.add_node(5, 0, rot_net.tensor.len());
     println!("with new node: {}", rot_net);
+    rot_net.add_node(3, 0, rot_net.tensor.len());
+    println!("with new node: {}", rot_net);
 
+    rot_net.add_connection(2, 7);
+    println!("with new node: {}", rot_net);
     //TODO: support recurrent connections
     //rot_net.add_connection(4, 4);
     //println!("with new connection {}", rot_net);
 
-    let signals = vec![127, 127, 127];
-    let output_signals = rot_net.forward_propagate(signals.clone());
-    // NOTE: initial nodeIds are out of order
-    println!(
-        "forward propagating {:?} returned {:?}",
-        signals.clone(),
-        output_signals
-    );
+    for i in 0..100000 {
+        let signals = vec![
+            rng.gen::<u8>() & 0b01111111,
+            rng.gen::<u8>() & 0b01111111,
+            rng.gen::<u8>() & 0b01111111,
+        ];
+        let output_signals =
+            rot_net.forward_propagate(signals.clone());
+
+        //timeit!({
+        //    rot_net.forward_propagate(signals.clone());
+        //});
+        //NOTE: initial nodeIds are out of order
+        println!(
+            "forward propagating {:?} returned {:?}",
+            signals.clone(),
+            output_signals
+        );
+    }
+    //let time = timeit_loops!(10000, {
+    //rot_net.forward_propagate(signals.clone());
+    //});
+    //println!("rot_net clocked @ {}", time);
 }

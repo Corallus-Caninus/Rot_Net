@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 itertools = "0.10.0"
 rand = "0.8.3"
+timeit = "0.1.2"
 # serde
 # flate2
 # TODO: find a way to graph with debug using plotter (conditional build)

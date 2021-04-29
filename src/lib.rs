@@ -436,7 +436,7 @@ pub mod psyclones {
 
     // NETWORK PARAMETERS //
     /// an edge in the network graph
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug)]
     pub struct connection {
         // the ID of the node this connection goes to.
         output_node: usize,
@@ -602,11 +602,12 @@ pub mod psyclones {
             output_node_index: usize,
         ) {
             let mut rng = rand::thread_rng();
+            // TODO: assert this doesnt create parallel edge and doesnt create recurrent (yet)
 
             let output_node =
                 self.get_node_mut(output_node_index).clone();
             let mut input_node = self.get_node_mut(input_node_index);
-            // TODO: assert this doesnt create parallel edge
+
             let new_connection = connection {
                 output_node: output_node.id,
                 param: rng.gen::<u8>(),
@@ -681,10 +682,10 @@ pub mod psyclones {
                 .zip(signals)
                 .collect::<Vec<(&node, u8)>>();
 
-            println!(
-                "FORWARD_PROP initialized: {:?}\n",
-                initialization
-            );
+            //println!(
+            //"FORWARD_PROP initialized: {:?}\n",
+            //initialization
+            //);
 
             // TODO: rework to have buffer entries be (nodeid, Vec<input_connections, signals>)
             //       stop when all nodeids are output nodes and perform one last sum outside
@@ -713,10 +714,7 @@ pub mod psyclones {
                 .flatten()
                 .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
-            println!(
-                "FORWARD_PROP ready with buffer: {:?}\n",
-                buffer
-            );
+            // TODO: integrate this and above into one bootstrap step
             // resort into node groups
             buffer = buffer
                 .iter()
@@ -735,20 +733,18 @@ pub mod psyclones {
                 })
                 .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
-            println!(
-                "FORWARD_PROP sorted with buffer: {:?}\n",
-                buffer
-            );
+            //println!(
+            //"FORWARD_PROP sorted with buffer: {:?}\n",
+            //buffer
+            //);
 
             // performs sum-normalize, activation, and next_node weighting per iteration
             // to maximize operations per address indirection and ready_node lookup
-            let mut next_buffer = buffer.clone();
             // short circuiting loop condition
             while !buffer.iter().all(|node| {
                 self.outputs.iter().any(|output| node.0.id == *output)
             }) {
-                println!("BUFFER: {:?}\n", buffer);
-                next_buffer = buffer.clone();
+                //println!("BUFFER: {:?}\n", buffer);
 
                 // NOTE: this is actually really good for hoisting from for loop
                 //       iff vec macro initializes allocation here
@@ -757,7 +753,7 @@ pub mod psyclones {
 
                 // check if nodes are ready to propagate
                 // TODO: can/should this be integrated to lazy op?
-                for node in next_buffer.iter() {
+                for node in buffer.iter() {
                     if self.node_ready_comparator(node.0, &node.1) {
                         //println!("preparing node {}", node.0.id);
                         ready_nodes.push(node.to_owned());
@@ -765,11 +761,11 @@ pub mod psyclones {
                         halted_nodes.push(node.to_owned());
                     }
                 }
-                println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
+                // println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
 
                 // propagate ready nodes
                 ready_nodes = ready_nodes.iter()
-                    .inspect(|activation| println!("activating: {:?}",activation))
+                    // .inspect(|activation| println!("activating: {:?}",activation))
                     .map(|node| {
                         // get the broadcast signal from this node
                         let broadcast_signal = activations::cond_rot_act(node.1.iter().fold(0,|res,acc|{
@@ -783,12 +779,12 @@ pub mod psyclones {
                     // TODO: chain and link the next operation for one lazy layer operation
                     .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
 
-                println!(
-                    "grouping {:?} node-connections",
-                    ready_nodes
-                );
+                //println!(
+                //"grouping {:?} node-connections",
+                //ready_nodes
+                //);
                 // TODO: this doesnt group correctly
-                next_buffer = ready_nodes
+                buffer = ready_nodes
                     // TODO: lazy this dont collect
                     .iter()
                     // add halted nodes
@@ -798,9 +794,9 @@ pub mod psyclones {
                     })
                     .group_by(|node| node.0.id)
                     .into_iter()
-                    .inspect(|node| {
-                        println!("GROUPING: {:?}", node.0)
-                    })
+                    //.inspect(|node| {
+                    //println!("GROUPING: {:?}", node.0)
+                    //})
                     .map(|(key, group)| {
                         (
                             self.get_node(key),
@@ -814,14 +810,14 @@ pub mod psyclones {
                         )
                     })
                     .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
-                buffer = next_buffer.clone();
+                //buffer = buffer.clone();
                 //println!("BROADCAST RESULT: {:?} nodes and {:?} previously halted nodes", ready_nodes, halted_nodes);
             }
 
-            println!("RAW FINISH BUFFER: {:?}", next_buffer);
+            //println!("RAW FINISH BUFFER: {:?}", buffer);
 
             // now sum-normalize and activate the output vector
-            next_buffer
+            buffer
                 .iter()
                 .sorted_by(|node_a, node_b| {
                     Ord::cmp(node_a.0, node_b.0)
@@ -855,7 +851,7 @@ pub mod psyclones {
             let ready = self.node_ready_comparator(node.0, &node.1);
             // ensure an output node isnt activated during hidden layer propagation
             if ready && node.0.connections.len() > 0 {
-                println!("node {:?} is ready", node);
+                //println!("node {:?} is ready", node);
                 // normalize-sum and broadcast output_connections
                 let broadcast_signal = activations::cond_rot_act(
                     node.1
