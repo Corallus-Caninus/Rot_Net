@@ -10,7 +10,9 @@
 // since topology must be initialized.
 pub mod psyclones {
     use itertools::Itertools;
+    use rayon::prelude::*;
     use rand::*;
+    use std::sync::{Arc,Mutex};
     use std::cmp::Ordering;
     use std::fmt;
     use std::ops::Index;
@@ -690,8 +692,6 @@ pub mod psyclones {
         // TODO: split_tree_depths to get innovation 
         //       and compare different topologies.
 
-
-
         // TODO: rework this to a sorting routine that does
         // not need to cycle the network as an
         // infinite iterator while loop
@@ -787,58 +787,56 @@ pub mod psyclones {
 
                 // NOTE: this is actually really good for hoisting from for loop
                 //       iff vec macro initializes allocation here
-                let mut ready_nodes = vec![];
-                let mut halted_nodes = vec![];
+
+                // let mut ready_nodes = Mutex::new(Vec::new());
+                // let mut halted_nodes = Mutex::new(Vec::new());
+                let mut ready_nodes = Vec::new();
+                let mut halted_nodes = Vec::new();
 
                 // check if nodes are ready to propagate
-                // TODO: can/should this be integrated to lazy op?
-                for node in buffer.iter() {
+                // TODO: parallelize this filter somehow
+                buffer.iter().for_each(|node|{
                     if self.node_ready_comparator(node.0, &node.1) {
                         //println!("preparing node {}", node.0.id);
                         ready_nodes.push(node.to_owned());
                     } else {
                         halted_nodes.push(node.to_owned());
                     }
-                }
+                });
+                // let mut ready_nodes: Vec<(&node, Vec<(&connection, u8)>)> = ready_nodes.lock().unwrap().into();
+                // let mut halted_nodes = halted_nodes.lock().unwrap().into();
+
                 // println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
 
                 // propagate ready nodes
-                ready_nodes = ready_nodes.iter()
+                ready_nodes = ready_nodes.par_iter()
                     // .inspect(|activation| println!("activating: {:?}",activation))
                     .map(|node| {
                         // get the broadcast signal from this node
                         let broadcast_signal = 
-                    //activations::cond_rot_act(
+                        // @DEPRECATED: or justify 
+                        //activations::cond_rot_act(
+                        // NOTE: this is not parallelized here due to associative property
                         node.1.iter().fold(0,|res,acc|{
                             (res >> 1) + (weights::weight(acc.0.param,acc.1) >> 1)
                         });
-                    //);
+                        //);
                         node.0.connections.iter().map(|out_connection|{
                             (self.get_node(out_connection.output_node), vec![(out_connection, broadcast_signal)])
                         }).collect::<Vec<(&node, Vec<(&connection, u8)>)>>()
                     })
                     .flatten()
-                    // TODO: chain and link the next operation for one lazy layer operation
-                    .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
-
-                //println!(
-                //"grouping {:?} node-connections",
-                //ready_nodes
-                //);
-                // TODO: this doesnt group correctly
-                buffer = ready_nodes
-                    // TODO: lazy this dont collect
-                    .iter()
                     // add halted nodes
-                    .chain(halted_nodes.iter())
-                    .sorted_by(|node_a, node_b| {
+                    .chain(halted_nodes.into_par_iter())
+                    .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
+                    ready_nodes.par_sort_by(|node_a, node_b| {
                         Ord::cmp(&node_a.0.id, &node_b.0.id)
-                    })
-                    .group_by(|node| node.0.id)
+                    });
+
+                    // TODO: all of this should be parallel? this may be really fast anyways
+                    //      would like to remove clone here so may rework
+                    buffer = ready_nodes.iter().group_by(|node| node.0.id)
                     .into_iter()
-                    //.inspect(|node| {
-                    //println!("GROUPING: {:?}", node.0)
-                    //})
                     .map(|(key, group)| {
                         (
                             self.get_node(key),
@@ -852,21 +850,22 @@ pub mod psyclones {
                         )
                     })
                     .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
-                //buffer = buffer.clone();
-                //println!("BROADCAST RESULT: {:?} nodes and {:?} previously halted nodes", ready_nodes, halted_nodes);
             }
 
-            //println!("RAW FINISH BUFFER: {:?}", buffer);
-
             // now sum-normalize and activate the output vector
-            buffer
-                .iter()
-                .sorted_by(|node_a, node_b| {
+                buffer.par_sort_by(|node_a, node_b| {
                     Ord::cmp(node_a.0, node_b.0)
-                })
+                });
+                buffer
+                .iter()
                 .group_by(|node| node.0)
                 .into_iter()
-                .map(|(_key, group)| {
+                .map(|(_key,group)|
+                group.into_iter().collect::<Vec<&(&node, Vec<(&connection,u8)>)>>())
+                .collect::<Vec<Vec<&(&node,Vec<(&connection, u8)>)>>>()
+
+                .into_par_iter()
+                .map(|group| {
                     //activations::cond_rot_act(
                         group
                             .into_iter()
@@ -879,6 +878,7 @@ pub mod psyclones {
                             })
                             .flatten()
                             // TODO: is this associative/parallelizable? me thinks no
+                            // NOTE: this is not parallelized
                             .fold(0, |acc, res| {
                                 (acc >> 1) + (res >> 1)
                             })
