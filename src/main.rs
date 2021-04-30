@@ -113,20 +113,21 @@ fn main() {
 
     println!("Hello, world!");
     let mut rot_net = rot_net::initialize_network(3, 4);
-    rot_net.add_node(4, 0, rot_net.tensor.len());
-    println!("with new node: {}", rot_net);
-    rot_net.add_node(5, 0, rot_net.tensor.len());
-    println!("with new node: {}", rot_net);
-    rot_net.add_node(7, 0, rot_net.tensor.len());
-    println!("with new node: {}", rot_net);
+    for i in 0..10 {
+        rot_net.random_node();
+    }
+    for i in 0..10 {
+        rot_net.random_connection(3);
+    }
+    println!("rot_net construction finished.. {}", rot_net);
 
-    rot_net.add_connection(5, 7);
-    println!("with new node: {}", rot_net);
-    rot_net.add_connection(7, 5);
-    println!("with new node: {}", rot_net);
+    // rot_net.add_connection(5, 7);
+    // println!("with new node: {}", rot_net);
+    // rot_net.add_connection(7, 5);
+    // println!("with new node: {}", rot_net);
 
-    rot_net.add_connection(9, 7);
-    println!("with new node: {}", rot_net);
+    // rot_net.add_connection(9, 7);
+    // println!("with new node: {}", rot_net);
     //TODO: support recurrent connections
     //rot_net.add_connection(4, 4);
     //println!("with new connection {}", rot_net);
@@ -144,6 +145,7 @@ fn main() {
         signals.clone(),
         output_signals
     );
+
     println!("{}", rot_net);
     let time = timeit_loops!(10000, {
         rot_net.forward_propagate(signals.clone());

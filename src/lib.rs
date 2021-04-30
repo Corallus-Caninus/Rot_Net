@@ -12,6 +12,7 @@ pub mod psyclones {
     use itertools::Itertools;
     use rayon::prelude::*;
     use rand::*;
+    use rand::prelude::*;
     use std::sync::{Arc,Mutex};
     use std::cmp::Ordering;
     use std::fmt;
@@ -566,7 +567,7 @@ pub mod psyclones {
         pub fn get_node_mut(&mut self, index: usize) -> &mut node {
             // TODO: output nodes arent considered in this
             self.tensor
-                .iter_mut()
+                .par_iter_mut()
                 .find(|node| node.id == index)
                 .unwrap()
         }
@@ -574,7 +575,7 @@ pub mod psyclones {
         /// network given the node id
         pub fn get_node(&self, index: usize) -> &node {
             // TODO: output nodes arent considered in this
-            self.tensor.iter().find(|node| node.id == index).unwrap()
+            self.tensor.par_iter().find(|node| node.id == index).unwrap()
         }
         // TODO: this *might* be slow but the price for not having
         // input_nodes in connections prove this with unittests.
@@ -584,7 +585,7 @@ pub mod psyclones {
             node_id: usize,
         ) -> Vec<&connection> {
             self.tensor
-                .iter()
+                .par_iter()
                 .flat_map(|node| {
                     node.connections
                         .iter()
@@ -623,10 +624,13 @@ pub mod psyclones {
             // either we reach the output vector or we find the output_node
             while next.len() != 0{
                 println!("walking for cycles.. {:?}", next);
-                next = next.iter().map(|edge|{
+                next = next.par_iter().map(|edge|{
                     self.get_node(edge.output_node).connections
                     .iter().collect::<Vec<&connection>>()
-                }).flatten()
+                })
+                .flatten()
+                .collect::<Vec<&connection>>()
+                .into_iter()
                 // since we are just looking at subtree traces..
                 .unique_by(|connection| connection.output_node)
                 .collect();
@@ -687,6 +691,32 @@ pub mod psyclones {
             new_node.connections.push(new_output);
 
             self.tensor.push(new_node);
+        }
+        /// add a random node by splitting a connection in the network
+        pub fn random_node(&mut self){
+            let mut rng = rand::thread_rng();
+            // get a random connection to split
+            let node_select = rng.gen_range(self.outputs.len()..self.tensor.len());
+            let connection_select = rng.gen_range(0..self.get_node(node_select).connections.len());
+            self.add_node(node_select, connection_select, self.tensor.len());
+        }
+        // TODO: dont use num_inputs here
+        /// attempt to add a random connection to the network
+        pub fn random_connection(&mut self, num_inputs: usize){
+            let mut rng = rand::thread_rng();
+
+            let mut second_node_select = num_inputs;
+            while (self.outputs.len()..num_inputs)
+            .into_iter().any(|input| second_node_select == input){
+                let second_node_select = rng.gen_range(0..self.tensor.len());
+            }
+
+            let mut first_node_select = 0;// garunteed to be output node
+            // hillbilly replacement distribution fix
+            while (first_node_select == first_node_select) && first_node_select == 0{
+                first_node_select = rng.gen_range(self.outputs.len()..self.tensor.len());
+            }
+            self.add_connection(first_node_select, second_node_select);
         }
 
         // TODO: split_tree_depths to get innovation 
