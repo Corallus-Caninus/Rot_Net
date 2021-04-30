@@ -598,20 +598,52 @@ pub mod psyclones {
         /// parameter
         pub fn add_connection(
             &mut self,
-            input_node_index: usize,
-            output_node_index: usize,
+            input_node_id: usize,
+            output_node_id: usize,
         ) {
             let mut rng = rand::thread_rng();
+
             // TODO: assert this doesnt create parallel edge and doesnt create recurrent (yet)
+            //      NOTE: parallel edges are actually allowed here.. which is weird.. 
+            //            kinda like multiplication in weighting of a given signal if 
+            //            params are the same for all parallel edges (hillbilly feature innovation)
+            let output_node = self.get_node(output_node_id);
 
-            let output_node =
-                self.get_node_mut(output_node_index).clone();
-            let mut input_node = self.get_node_mut(input_node_index);
+            // TODO: extract into a method
+            // walk routine: this should work for all cases: loop, cycle, output-input (extrema) edges in a graph
+            //               also should prevent output->hidden connections leaving outputs with connection.len() == 0
+            let mut next = output_node.connections.iter().collect::<Vec<&connection>>();
+            if next.iter().any(|connection|connection.output_node == input_node_id){
+                // NOTE: the proposed connection will create a cycle so we silently ignore
+                println!("FAILED TO ADD CONNECTION {}->{} is a cycle", input_node_id, output_node_id);
+                return 
+            }
+            // either we reach the output vector or we find the output_node
+            while next.len() != 0{
+                println!("walking for cycles.. {:?}", next);
+                next = next.iter().map(|edge|{
+                    self.get_node(edge.output_node).connections
+                    .iter().collect::<Vec<&connection>>()
+                }).flatten()
+                // since we are just looking at subtree traces..
+                .unique_by(|connection| connection.output_node)
+                .collect();
 
+                if next.iter().any(|connection|connection.output_node == input_node_id){
+                    // NOTE: the proposed connection will create a cycle so we silently ignore
+                    println!("FAILED TO ADD CONNECTION {}->{} is a cycle", input_node_id, output_node_id);
+                    return 
+                }
+            }
+
+
+            let mut output_node =
+                self.get_node_mut(output_node_id);
             let new_connection = connection {
                 output_node: output_node.id,
                 param: rng.gen::<u8>(),
             };
+            let mut input_node = self.get_node_mut(input_node_id);
             input_node.connections.push(new_connection);
         }
         /// split an existing connection to add a node to
@@ -654,6 +686,12 @@ pub mod psyclones {
 
             self.tensor.push(new_node);
         }
+
+        // TODO: split_tree_depths to get innovation 
+        //       and compare different topologies.
+
+
+
         // TODO: rework this to a sorting routine that does
         // not need to cycle the network as an
         // infinite iterator while loop
@@ -661,6 +699,8 @@ pub mod psyclones {
         // TODO: use node groupings to reduce filtering
         // recalculating and sorting
 
+        // NOTE: this technically can allow parallel edges. 
+        //       with recurrence this will allow all graphs to be propagates.
         /// forward propagate the given signals through the
         /// network and return the output node
         /// values. signals are signals arriving at each
@@ -740,8 +780,6 @@ pub mod psyclones {
 
             // performs sum-normalize, activation, and next_node weighting per iteration
             // to maximize operations per address indirection and ready_node lookup
-            // short circuiting loop condition
-            // TODO: tuple should be (connection, signal) *duh*
             while !buffer.iter().all(|node| {
                 self.outputs.iter().any(|output| node.0.id == *output)
             }) {

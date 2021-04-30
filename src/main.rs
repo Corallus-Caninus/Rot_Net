@@ -120,13 +120,18 @@ fn main() {
     rot_net.add_node(7, 0, rot_net.tensor.len());
     println!("with new node: {}", rot_net);
 
-    //rot_net.add_connection(2, 7);
-    //println!("with new node: {}", rot_net);
+    rot_net.add_connection(5, 7);
+    println!("with new node: {}", rot_net);
+    rot_net.add_connection(7, 5);
+    println!("with new node: {}", rot_net);
+
+    rot_net.add_connection(9, 7);
+    println!("with new node: {}", rot_net);
     //TODO: support recurrent connections
     //rot_net.add_connection(4, 4);
     //println!("with new connection {}", rot_net);
 
-    for i in 0..100000 {
+    for i in 0..100 {
         let signals =
             vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()];
         let output_signals =
@@ -142,6 +147,7 @@ fn main() {
             output_signals
         );
     }
+    println!("{}", rot_net);
     //let time = timeit_loops!(10000, {
     //rot_net.forward_propagate(signals.clone());
     //});
