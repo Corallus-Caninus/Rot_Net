@@ -127,11 +127,8 @@ fn main() {
     //println!("with new connection {}", rot_net);
 
     for i in 0..100000 {
-        let signals = vec![
-            rng.gen::<u8>() ,
-            rng.gen::<u8>() ,
-            rng.gen::<u8>() ,
-        ];
+        let signals =
+            vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()];
         let output_signals =
             rot_net.forward_propagate(signals.clone());
 

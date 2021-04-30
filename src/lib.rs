@@ -704,15 +704,15 @@ pub mod psyclones {
                                     connection_param.output_node,
                                 ),
                                 vec![(
-                                    connection_param.output_node,
-                                    node.1,
+                                    connection_param,
+                                    weights::weight(node.1, connection_param.param),
                                 )],
                             )
                         },
                     )
                 })
                 .flatten()
-                .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
+                .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
 
             // TODO: integrate this and above into one bootstrap step
             // resort into node groups
@@ -728,10 +728,10 @@ pub mod psyclones {
                             .into_iter()
                             .map(|node| node.1.clone())
                             .flatten()
-                            .collect::<Vec<(usize, u8)>>(),
+                            .collect::<Vec<(&connection, u8)>>(),
                     )
                 })
-                .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
+                .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
 
             //println!(
             //"FORWARD_PROP sorted with buffer: {:?}\n",
@@ -741,6 +741,7 @@ pub mod psyclones {
             // performs sum-normalize, activation, and next_node weighting per iteration
             // to maximize operations per address indirection and ready_node lookup
             // short circuiting loop condition
+            // TODO: tuple should be (connection, signal) *duh*
             while !buffer.iter().all(|node| {
                 self.outputs.iter().any(|output| node.0.id == *output)
             }) {
@@ -768,16 +769,19 @@ pub mod psyclones {
                     // .inspect(|activation| println!("activating: {:?}",activation))
                     .map(|node| {
                         // get the broadcast signal from this node
-                        let broadcast_signal = activations::cond_rot_act(node.1.iter().fold(0,|res,acc|{
-                            (res + acc.1) >> 1
-                        }));
+                        let broadcast_signal = 
+                    //activations::cond_rot_act(
+                        node.1.iter().fold(0,|res,acc|{
+                            (res >> 1) + (weights::weight(acc.0.param,acc.1) >> 1)
+                        });
+                    //);
                         node.0.connections.iter().map(|out_connection|{
-                            (self.get_node(out_connection.output_node),vec![(out_connection.output_node, broadcast_signal)])
-                        }).collect::<Vec<(&node, Vec<(usize, u8)>)>>()
+                            (self.get_node(out_connection.output_node), vec![(out_connection, broadcast_signal)])
+                        }).collect::<Vec<(&node, Vec<(&connection, u8)>)>>()
                     })
                     .flatten()
                     // TODO: chain and link the next operation for one lazy layer operation
-                    .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
+                    .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
 
                 //println!(
                 //"grouping {:?} node-connections",
@@ -806,10 +810,10 @@ pub mod psyclones {
                                     group_node.1.clone()
                                 })
                                 .flatten()
-                                .collect::<Vec<(usize, u8)>>(),
+                                .collect::<Vec<(&connection, u8)>>(),
                         )
                     })
-                    .collect::<Vec<(&node, Vec<(usize, u8)>)>>();
+                    .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
                 //buffer = buffer.clone();
                 //println!("BROADCAST RESULT: {:?} nodes and {:?} previously halted nodes", ready_nodes, halted_nodes);
             }
@@ -825,7 +829,7 @@ pub mod psyclones {
                 .group_by(|node| node.0)
                 .into_iter()
                 .map(|(_key, group)| {
-                    activations::cond_rot_act(
+                    //activations::cond_rot_act(
                         group
                             .into_iter()
                             .map(|node| {
@@ -839,60 +843,10 @@ pub mod psyclones {
                             // TODO: is this associative/parallelizable? me thinks no
                             .fold(0, |acc, res| {
                                 (acc >> 1) + (res >> 1)
-                            }),
-                    )
+                            })
+                    //)
                 })
                 .collect()
-        }
-
-        // TODO: this should read "self lives longer than references to nodes"
-        /// activate a node, returning all output nodes with their signals
-        fn activate_node<'a, 'b: 'a>(
-            &'b self,
-            node: (&'a node, Vec<(usize, u8)>),
-        ) -> Vec<(&'a node, Vec<(usize, u8)>)> {
-            let ready = self.node_ready_comparator(node.0, &node.1);
-            // ensure an output node isnt activated during hidden layer propagation
-            if ready && node.0.connections.len() > 0 {
-                //println!("node {:?} is ready", node);
-                // normalize-sum and broadcast output_connections
-                let broadcast_signal = activations::cond_rot_act(
-                    node.1
-                        .iter()
-                        .fold(0, |res, acc| (res + acc.1) >> 1),
-                );
-                // weight the next_nodes and return the node buffer object
-                node.0
-                    .connections
-                    .iter()
-                    .map(|output_connection| {
-                        let next_node = self
-                            .get_node(output_connection.output_node);
-                        (
-                            self.get_node(
-                                output_connection.output_node,
-                            ),
-                            next_node
-                                .connections
-                                .iter()
-                                .map(|connection_param| {
-                                    (
-                                        connection_param.output_node,
-                                        weights::weight(
-                                            broadcast_signal,
-                                            connection_param.param,
-                                        ),
-                                    )
-                                })
-                                .collect::<Vec<(usize, u8)>>(),
-                        )
-                    })
-                    .collect::<Vec<(&node, Vec<(usize, u8)>)>>()
-            } else {
-                //println!("node {:?} is not ready", node);
-                // halt this node by returning the current value
-                vec![node]
-            }
         }
 
         /// check if all connections for a
@@ -904,7 +858,7 @@ pub mod psyclones {
         pub fn node_ready_comparator(
             &self,
             node: &node,
-            cur_in_connections: &Vec<(usize, u8)>,
+            cur_in_connections: &Vec<(&connection, u8)>,
         ) -> bool {
             // all in_connections for this node
             let in_connections = self.get_in_connections(node.id);
