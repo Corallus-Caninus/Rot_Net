@@ -10,14 +10,15 @@
 // since topology must be initialized.
 pub mod psyclones {
     use itertools::Itertools;
-    use rayon::prelude::*;
-    use rand::*;
     use rand::prelude::*;
-    use std::sync::{Arc,Mutex};
+    use rand::*;
+    use rayon::prelude::*;
+    use std::cell::RefCell;
     use std::cmp::Ordering;
     use std::fmt;
     use std::ops::Index;
     use std::string::String;
+    use std::sync::{Arc, Mutex};
 
     // NETWORK FUNCTIONS //
     /// linearly approximated activation functions and their
@@ -161,16 +162,7 @@ pub mod psyclones {
             // bitcompare instructions.
             if param >> 7 == LSB_BITCHECK {
                 //CMP BIT 8
-                //passthrough the signal as a residual
-                // connection that skips
-                // this layer: TODO: special
-                // case do not activate in
-                // forward_propagation! consider
-                //       an option<u8> return type or just
-                // check in calling scope
-                // and       pass the
-                // bit here.  NO: Boolean is
-                // represented as 8 bits in modern pipelines
+                // TODO: this is residual connection
                 //
                 // NOTE: some computation balancing can be
                 // done by performing
@@ -439,10 +431,19 @@ pub mod psyclones {
 
     // NETWORK PARAMETERS //
     /// an edge in the network graph
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Debug)]
     pub struct connection {
         // the ID of the node this connection goes to.
-        output_node: usize,
+        // TODO: Arc Mutex is slow and bloated.
+        //       would prefer data parallel locality instead
+        //       if this is only addressing based solution
+        // NOTE: this representation is for architecture search.
+        //       Since param can represent a residual flag in MSB this should
+        //       be used to produce a Vec<Vec<u8>> vector of layer operations
+        //       for forward propagation.
+        output_node: Arc<Mutex<node>>,
+        // the ID of this connection
+        innovation: usize,
         param: u8,
     }
 
@@ -454,23 +455,25 @@ pub mod psyclones {
         id: usize,
         // the connections going out from this node
         connections: Vec<connection>,
+        // the innovation numbers of connections going into this node
+        input_connections: Vec<usize>,
     }
-    impl Ord for node {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.id.cmp(&other.id)
-        }
-    }
-    impl PartialOrd for node {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-    impl PartialEq for node {
-        fn eq(&self, other: &Self) -> bool {
-            self.id == other.id
-        }
-    }
-    impl Eq for node {} //Implied by PartialEq
+    // impl Ord for node<'a> {
+    //     fn cmp(&self, other: &Self) -> Ordering {
+    //         self.id.cmp(&other.id)
+    //     }
+    // }
+    // impl PartialOrd for node<'a> {
+    //     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    //         Some(self.cmp(other))
+    //     }
+    // }
+    // impl PartialEq for node<'a> {
+    //     fn eq(&self, other: &Self) -> bool {
+    //         self.id == other.id
+    //     }
+    // }
+    // impl Eq for node<'a> {} //Implied by PartialEq
 
     /// an Artificial Neural Network represented as a sparse
     /// index format. This data structure supports both DAG
@@ -508,9 +511,12 @@ pub mod psyclones {
     #[derive(Clone)] //TODO: where is this called it is potentially very
                      // costly.
     pub struct rot_net {
-        pub tensor: Vec<node>,
+        pub tensor: Vec<Arc<Mutex<node>>>,
         // the output node id's
         pub outputs: Vec<usize>,
+        // current max_innovation prevents having to
+        // count each time a connection is added *for the low low cost of 1 usize!*
+        pub innovation_counter: usize,
     }
     // METHODS //
     impl rot_net {
@@ -520,30 +526,8 @@ pub mod psyclones {
         ) -> Self {
             let mut rng = rand::thread_rng();
             let mut tensor = vec![];
+            let mut innovation_counter = 0;
 
-            // since we are considering recurrent
-            // connections as buffer roll over
-            // (not param associated so doesnt bloat)
-            // we allow output nodes to exist in the
-            // tensor. This is +1 timestep recurrence.
-            for input in 0..inputs {
-                let mut new_node = node {
-                    id: tensor.len() + outputs,
-                    connections: vec![],
-                };
-                for output in 0..outputs {
-                    let new_connection = connection {
-                        output_node: output,
-                        param: rng.gen::<u8>(),
-                    };
-                    new_node.connections.push(new_connection);
-                    println!(
-                        "initializing connection for node with id {}",
-                        tensor.len()
-                    );
-                }
-                tensor.push(new_node);
-            }
             // add the output connections one time
             // TODO: rework this order of operations for
             // readability
@@ -552,51 +536,98 @@ pub mod psyclones {
                 let mut new_node = node {
                     id: output,
                     connections: vec![],
+                    input_connections: vec![],
                 };
-                tensor.push(new_node);
+                // TODO: ensure this aligns correctly with input node creation
+                // one input connection innovation each
+                for input in 0..inputs {
+                    innovation_counter += 1;
+                    new_node
+                        .input_connections
+                        .push(innovation_counter);
+                }
+                tensor.push(Arc::new(Mutex::new(new_node)));
                 output_vector.push(output);
+            }
+
+            // reset the counter
+            innovation_counter = 0;
+            // since we are considering recurrent
+            // connections as buffer roll over
+            // (not param associated so doesnt bloat)
+            // we allow output nodes to exist in the
+            // tensor. This is +1 timestep recurrence.
+            for input in 0..inputs {
+                println!("initializing with id {}", outputs + input);
+                // TODO: input nodes are wrong
+                let mut new_node = node {
+                    id: input + outputs,
+                    connections: vec![],
+                    input_connections: vec![],
+                };
+                for output in 0..outputs {
+                    let new_connection = connection {
+                        output_node: tensor[output].clone(),
+                        innovation: innovation_counter,
+                        param: rng.gen::<u8>(),
+                    };
+                    new_node.connections.push(new_connection);
+                    println!(
+                        "initializing connection for node with id {}",
+                        tensor.len()
+                    );
+                    innovation_counter += 1;
+                }
+                tensor.push(Arc::new(Mutex::new(new_node)));
             }
             rot_net {
                 tensor: tensor,
                 outputs: output_vector,
+                innovation_counter: innovation_counter,
             }
         }
-        // TODO: make this (also?) immutable for parallelization
+        // TODO: dont use lookup by ID (costly since data structure rework)
+
         /// returns a mutable reference to a node in the
         /// network given the node id
-        pub fn get_node_mut(&mut self, index: usize) -> &mut node {
-            // TODO: output nodes arent considered in this
-            self.tensor
-                .par_iter_mut()
-                .find(|node| node.id == index)
-                .unwrap()
-        }
+        // pub fn get_node_mut(&mut self, index: usize) -> &mut node<'c> {
+        //     // TODO: output nodes arent considered in this
+        //     self.tensor
+        //         .par_iter_mut()
+        //         .find_any(|node| node.borrow().id == index)
+        //         .unwrap().borrow_mut()
+        // }
         /// returns an immutable reference to a node in the
         /// network given the node id
-        pub fn get_node(&self, index: usize) -> &node {
+        pub fn get_node(&self, index: usize) -> Arc<Mutex<node>> {
             // TODO: output nodes arent considered in this
-            self.tensor.par_iter().find(|node| node.id == index).unwrap()
+            self.tensor
+                .iter()
+                .find(|node| node.lock().unwrap().id == index)
+                .unwrap()
+                .clone()
         }
-        // TODO: this *might* be slow but the price for not having
+        // @DEPRECATED
+        // TODO: this be slow
         // input_nodes in connections prove this with unittests.
         // input_nodes would also help with recurrent connections.
-        pub fn get_in_connections(
-            &self,
-            node_id: usize,
-        ) -> Vec<&connection> {
-            self.tensor
-                .par_iter()
-                .flat_map(|node| {
-                    node.connections
-                        .iter()
-                        //.map(|connection| connection.output_node)
-                        .filter(|connection| {
-                            connection.output_node == node_id
-                        })
-                        .collect::<Vec<&connection>>()
-                })
-                .collect()
-        }
+        // pub fn get_in_connections(
+        //     &self,
+        //     node_id: usize,
+        // ) -> Vec<&connection> {
+        //     self.tensor
+        //         .par_iter()
+        //         .flat_map(|node| {
+        //             node.connections
+        //                 .iter()
+        //                 //.map(|connection| connection.output_node)
+        //                 .filter(|connection| {
+        //                     connection.output_node.id == node_id
+        //                 })
+        //                 .collect::<Vec<&connection>>()
+        //         })
+        //         .collect()
+        // }
         /// add a connection to the network with randomized
         /// parameter
         pub fn add_connection(
@@ -604,53 +635,91 @@ pub mod psyclones {
             input_node_id: usize,
             output_node_id: usize,
         ) {
+            // println!(
+            //     "adding connection..{} {}",
+            //     input_node_id, output_node_id
+            // );
             let mut rng = rand::thread_rng();
 
-            // TODO: assert this doesnt create parallel edge and doesnt create recurrent (yet)
-            //      NOTE: parallel edges are actually allowed here.. which is weird.. 
-            //            kinda like multiplication in weighting of a given signal if 
-            //            params are the same for all parallel edges (hillbilly feature innovation)
+            if input_node_id == output_node_id {
+                return; // loop
+            };
+
             let output_node = self.get_node(output_node_id);
 
-            // TODO: extract into a method
+            // TODO: verify this detects cycles
             // walk routine: this should work for all cases: loop, cycle, output-input (extrema) edges in a graph
             //               also should prevent output->hidden connections leaving outputs with connection.len() == 0
-            let mut next = output_node.connections.iter().collect::<Vec<&connection>>();
-            if next.iter().any(|connection|connection.output_node == input_node_id){
+            let mut next = output_node
+                .lock()
+                .unwrap()
+                .connections
+                .iter()
+                .map(|connection| connection.output_node.clone())
+                .unique_by(|node| node.lock().unwrap().id)
+                // this is fine since connection is clone of Arc
+                .collect::<Vec<Arc<Mutex<node>>>>();
+
+            if next.iter().any(|node| {
+                let id = node.lock().unwrap().id;
+                (id == input_node_id) || (id == output_node_id)
+            }) {
                 // NOTE: the proposed connection will create a cycle so we silently ignore
-                println!("FAILED TO ADD CONNECTION {}->{} is a cycle", input_node_id, output_node_id);
-                return 
+                // println!(
+                //     "FAILED TO ADD CONNECTION {}->{} is a cycle",
+                //     input_node_id, output_node_id
+                // );
+                return;
             }
             // either we reach the output vector or we find the output_node
-            while next.len() != 0{
-                println!("walking for cycles.. {:?}", next);
-                next = next.par_iter().map(|edge|{
-                    self.get_node(edge.output_node).connections
-                    .iter().collect::<Vec<&connection>>()
-                })
-                .flatten()
-                .collect::<Vec<&connection>>()
-                .into_iter()
-                // since we are just looking at subtree traces..
-                .unique_by(|connection| connection.output_node)
-                .collect();
+            while next.len() != 0 {
+                next = next
+                    .into_iter()
+                    .unique_by(|node| node.lock().unwrap().id)
+                    .map(|node| {
+                        node.lock()
+                            .unwrap()
+                            .connections
+                            .iter()
+                            .map(|edge| edge.output_node.clone())
+                            .collect::<Vec<Arc<Mutex<node>>>>()
+                    })
+                    .flatten()
+                    .collect::<Vec<Arc<Mutex<node>>>>();
 
-                if next.iter().any(|connection|connection.output_node == input_node_id){
+                if next.iter().any(|node| {
+                    let id = node.lock().unwrap().id;
+                    (id == input_node_id) || (id == output_node_id)
+                }) {
                     // NOTE: the proposed connection will create a cycle so we silently ignore
-                    println!("FAILED TO ADD CONNECTION {}->{} is a cycle", input_node_id, output_node_id);
-                    return 
+                    // println!(
+                    //     "FAILED TO ADD CONNECTION {}->{} is a cycle",
+                    //     input_node_id, output_node_id
+                    // );
+                    return;
                 }
             }
 
-
-            let mut output_node =
-                self.get_node_mut(output_node_id);
+            self.innovation_counter += 1;
+            // add the connection to the output node
+            let mut output_node = self.get_node(output_node_id);
             let new_connection = connection {
-                output_node: output_node.id,
+                output_node: output_node.clone(),
+                innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
             };
-            let mut input_node = self.get_node_mut(input_node_id);
-            input_node.connections.push(new_connection);
+            output_node
+                .lock()
+                .unwrap()
+                .input_connections
+                .push(self.innovation_counter);
+            // add the connection to the input node
+            let mut input_node = self.get_node(input_node_id);
+            input_node
+                .lock()
+                .unwrap()
+                .connections
+                .push(new_connection);
         }
         /// split an existing connection to add a node to
         /// the network takes a node index and a
@@ -665,61 +734,106 @@ pub mod psyclones {
         ) {
             let mut rng = rand::thread_rng();
 
-            let mut new_node = node {
+            let mut new_node = Arc::new(Mutex::new(node {
                 id: cur_node_id,
                 connections: vec![],
-            };
+                input_connections: vec![],
+            }));
+            // TODO: check if we should be using weak references in Arc here for leaking
 
             // get the connection's vertices from the graph
-            let input_node = self.get_node_mut(node_index);
-            let output_node_id =
-                input_node.connections[connection_index].output_node;
+            let input_node = self.get_node(node_index);
+            let output_node =
+                input_node.lock().unwrap().connections.clone()
+                    [connection_index]
+                    .output_node
+                    .clone();
 
             // add the new_node's input connection to the
             // graph
+            self.innovation_counter += 1;
             let new_input = connection {
-                output_node: new_node.id,
+                output_node: new_node.clone(),
+                innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
             };
-            input_node.connections.push(new_input);
+            input_node.lock().unwrap().connections.push(new_input);
+            // add the new input_connection to new_node
+            new_node
+                .lock()
+                .unwrap()
+                .input_connections
+                .push(self.innovation_counter);
             // add the new_node's output connection to the
             // graph
+            self.innovation_counter += 1;
             let new_output = connection {
-                output_node: output_node_id,
+                output_node: output_node.clone(),
+                innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
             };
-            new_node.connections.push(new_output);
+            // TODO: does this deadlock?
+            new_node.lock().unwrap().connections.push(new_output);
+            // add the new out_connection to output_node
+            output_node
+                .lock()
+                .unwrap()
+                .input_connections
+                .push(self.innovation_counter);
 
             self.tensor.push(new_node);
         }
         /// add a random node by splitting a connection in the network
-        pub fn random_node(&mut self){
+        pub fn random_node(&mut self) {
             let mut rng = rand::thread_rng();
             // get a random connection to split
-            let node_select = rng.gen_range(self.outputs.len()..self.tensor.len());
-            let connection_select = rng.gen_range(0..self.get_node(node_select).connections.len());
-            self.add_node(node_select, connection_select, self.tensor.len());
+            let node_select =
+                rng.gen_range(self.outputs.len()..self.tensor.len());
+            let connection_select = rng.gen_range(
+                0..self
+                    .get_node(node_select)
+                    .lock()
+                    .unwrap()
+                    .connections
+                    .len(),
+            );
+            self.add_node(
+                node_select,
+                connection_select,
+                self.tensor.len(),
+            );
         }
         // TODO: dont use num_inputs here
         /// attempt to add a random connection to the network
-        pub fn random_connection(&mut self, num_inputs: usize){
+        pub fn random_connection(&mut self, num_inputs: usize) {
             let mut rng = rand::thread_rng();
 
-            let mut second_node_select = num_inputs;
+            // TODO: this causes false short circuiting of distribution
+            let mut second_node_select =
+                rng.gen_range(0..self.tensor.len());
             while (self.outputs.len()..num_inputs)
-            .into_iter().any(|input| second_node_select == input){
-                let second_node_select = rng.gen_range(0..self.tensor.len());
+                .into_iter()
+                .any(|input| second_node_select == input)
+            {
+                second_node_select =
+                    rng.gen_range(0..self.tensor.len());
             }
 
-            let mut first_node_select = 0;// garunteed to be output node
-            // hillbilly replacement distribution fix
-            while (first_node_select == first_node_select) && first_node_select == 0{
-                first_node_select = rng.gen_range(self.outputs.len()..self.tensor.len());
+            let mut first_node_select = 0; // garunteed to be output node
+                                           // hillbilly replacement distribution fix
+            while (first_node_select == first_node_select)
+                && first_node_select == 0
+            {
+                first_node_select = rng
+                    .gen_range(self.outputs.len()..self.tensor.len());
             }
-            self.add_connection(first_node_select, second_node_select);
+            self.add_connection(
+                first_node_select,
+                second_node_select,
+            );
         }
 
-        // TODO: split_tree_depths to get innovation 
+        // TODO: split_tree_depths to get innovation
         //       and compare different topologies.
 
         // TODO: rework this to a sorting routine that does
@@ -728,215 +842,228 @@ pub mod psyclones {
         // TODO: recurrent connections
         // TODO: use node groupings to reduce filtering
         // recalculating and sorting
+        // TODO: unless sorting can be done its worth it to
+        //       add input_node to connections (searching takes
+        //       MUCH longer than memory is consumed, O(n)ish )
 
-        // NOTE: this technically can allow parallel edges. 
+        // NOTE: this technically can allow parallel edges.
         //       with recurrence this will allow all graphs to be propagates.
-        /// forward propagate the given signals through the
-        /// network and return the output node
-        /// values. signals are signals arriving at each
-        /// input node there should be one signal
-        /// per input node.
-        pub fn forward_propagate(&self, signals: Vec<u8>) -> Vec<u8> {
-            // TODO: assert vector
-            // dimensions are appropriate for this
-            // network: self.input_nodes.len == signals.len
-            // TODO: remove .clone, .cloned and .collect
+        // forward propagate the given signals through the
+        // network and return the output node
+        // values. signals are signals arriving at each
+        // input node there should be one signal
+        // per input node.
+        // pub fn forward_propagate(&self, signals: Vec<u8>) -> Vec<u8> {
+        //     // TODO: assert vector
+        //     // dimensions are appropriate for this
+        //     // network: self.input_nodes.len == signals.len
+        //     // TODO: remove .clone, .cloned and .collect
 
-            // Since this is a nodal representation of neural network
-            // data structure the buffer is associated signals with
-            // nodes (ready to broadcast)
-            let initialization = self
-                .tensor
-                .iter()
-                .take(signals.len())
-                .zip(signals)
-                .collect::<Vec<(&node, u8)>>();
+        //     // Since this is a nodal representation of neural network
+        //     // data structure the buffer is associated signals with
+        //     // nodes (ready to broadcast)
+        //     let initialization = self
+        //         .tensor
+        //         .iter()
+        //         .take(signals.len())
+        //         .zip(signals)
+        //         .collect::<Vec<(&RefCell<node>, u8)>>();
 
-            //println!(
-            //"FORWARD_PROP initialized: {:?}\n",
-            //initialization
-            //);
+        //     //println!(
+        //     //"FORWARD_PROP initialized: {:?}\n",
+        //     //initialization
+        //     //);
 
-            // TODO: rework to have buffer entries be (nodeid, Vec<input_connections, signals>)
-            //       stop when all nodeids are output nodes and perform one last sum outside
-            //       loop then return. dont overthink it.
+        //     // TODO: rework to have buffer entries be (nodeid, Vec<input_connections, signals>)
+        //     //       stop when all nodeids are output nodes and perform one last sum outside
+        //     //       loop then return. dont overthink it.
 
-            // perform the initial broadcast (without activation)
-            let mut buffer = initialization
-                .iter()
-                // TODO: this is supposed to be output_connection.output_node node node.0.id
-                .map(|node| {
-                    //(node.0, vec![(node.0.id, node.1)])
-                    node.0.connections.iter().map(
-                        move |connection_param| {
-                            (
-                                self.get_node(
-                                    connection_param.output_node,
-                                ),
-                                vec![(
-                                    connection_param,
-                                    weights::weight(node.1, connection_param.param),
-                                )],
-                            )
-                        },
-                    )
-                })
-                .flatten()
-                .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
+        //     // perform the initial broadcast (without activation)
+        //     let mut buffer = initialization
+        //         .iter()
+        //         // TODO: this is supposed to be output_connection.output_node node node.0.id
+        //         .map(|node| {
+        //             //(node.0, vec![(node.0.id, node.1)])
+        //             node.0.borrow().connections.iter().map(
+        //                 move |connection_param| {
+        //                     (
+        //                         self.get_node(
+        //                             connection_param.output_node.id,
+        //                         ),
+        //                         vec![(
+        //                             connection_param,
+        //                             weights::weight(node.1, connection_param.param),
+        //                         )],
+        //                     )
+        //                 },
+        //             )
+        //         })
+        //         .flatten()
+        //         // TODO: this is complicated enough to justify a
+        //         //       data structure or anonymous data structure instead of tuple
+        //         .collect::<Vec<(RefCell<node>, Vec<(&connection, u8)>)>>();
 
-            // TODO: integrate this and above into one bootstrap step
-            // resort into node groups
-            buffer = buffer
-                .iter()
-                .group_by(|node| node.0)
-                .into_iter()
-                .map(|(key, group)| {
-                    // collapse into one node
-                    (
-                        key,
-                        group
-                            .into_iter()
-                            .map(|node| node.1.clone())
-                            .flatten()
-                            .collect::<Vec<(&connection, u8)>>(),
-                    )
-                })
-                .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
+        //     // TODO: integrate this and above into one bootstrap step
+        //     // resort into node groups
+        //     buffer = buffer
+        //         .iter()
+        //         .group_by(|node| node.0.borrow().id)
+        //         .into_iter()
+        //         .map(|(key, group)| {
+        //             // collapse into one node
+        //             (
+        //                 self.get_node(key).borrow(),
+        //                 group
+        //                     .into_iter()
+        //                     .map(|node| node.1.clone())
+        //                     .flatten()
+        //                     .collect::<Vec<(&connection, u8)>>(),
+        //             )
+        //         })
+        //         .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
 
-            //println!(
-            //"FORWARD_PROP sorted with buffer: {:?}\n",
-            //buffer
-            //);
+        //     //println!(
+        //     //"FORWARD_PROP sorted with buffer: {:?}\n",
+        //     //buffer
+        //     //);
 
-            // performs sum-normalize, activation, and next_node weighting per iteration
-            // to maximize operations per address indirection and ready_node lookup
-            while !buffer.iter().all(|node| {
-                self.outputs.iter().any(|output| node.0.id == *output)
-            }) {
-                //println!("BUFFER: {:?}\n", buffer);
+        //     // performs sum-normalize, activation, and next_node weighting per iteration
+        //     // to maximize operations per address indirection and ready_node lookup
+        //     while !buffer.iter().all(|node| {
+        //         self.outputs.iter().any(|output| node.0.borrow().id == *output)
+        //     }) {
+        //         //println!("BUFFER: {:?}\n", buffer);
 
-                // NOTE: this is actually really good for hoisting from for loop
-                //       iff vec macro initializes allocation here
+        //         // NOTE: this is actually really good for hoisting from for loop
+        //         //       iff vec macro initializes allocation here
 
-                // let mut ready_nodes = Mutex::new(Vec::new());
-                // let mut halted_nodes = Mutex::new(Vec::new());
-                let mut ready_nodes = Vec::new();
-                let mut halted_nodes = Vec::new();
+        //         // let mut ready_nodes = Mutex::new(Vec::new());
+        //         // let mut halted_nodes = Mutex::new(Vec::new());
+        //         let mut ready_nodes = Vec::new();
+        //         let mut halted_nodes = Vec::new();
 
-                // check if nodes are ready to propagate
-                // TODO: parallelize this filter somehow
-                buffer.iter().for_each(|node|{
-                    if self.node_ready_comparator(node.0, &node.1) {
-                        //println!("preparing node {}", node.0.id);
-                        ready_nodes.push(node.to_owned());
-                    } else {
-                        halted_nodes.push(node.to_owned());
-                    }
-                });
-                // let mut ready_nodes: Vec<(&node, Vec<(&connection, u8)>)> = ready_nodes.lock().unwrap().into();
-                // let mut halted_nodes = halted_nodes.lock().unwrap().into();
+        //         // check if nodes are ready to propagate
+        //         // TODO: rework this better now that ready is a local search
+        //         //       in buffer not tensor
+        //         // short-circuiting node-local search
+        //         buffer.iter().for_each(|node|{
+        //             //if self.node_ready_comparator(node.0.borrow(), &node.1) {
+        //             if node.0.borrow().input_connections.iter().all(|input_connection|{
+        //                 node.1.iter().any(|buffer_connection|{
+        //                     *input_connection == buffer_connection.0.innovation
+        //                 })
+        //             }){
+        //                 ready_nodes.push(node.to_owned());
+        //             } else {
+        //                 halted_nodes.push(node.to_owned());
+        //             }
+        //         });
+        //         // let mut ready_nodes: Vec<(&node, Vec<(&connection, u8)>)> = ready_nodes.lock().unwrap().into();
+        //         // let mut halted_nodes = halted_nodes.lock().unwrap().into();
 
-                // println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
+        //         // println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
 
-                // propagate ready nodes
-                ready_nodes = ready_nodes.par_iter()
-                    // .inspect(|activation| println!("activating: {:?}",activation))
-                    .map(|node| {
-                        // get the broadcast signal from this node
-                        let broadcast_signal = 
-                        // @DEPRECATED: or justify 
-                        //activations::cond_rot_act(
-                        // NOTE: this is not parallelized here due to associative property
-                        node.1.iter().fold(0,|res,acc|{
-                            (res >> 1) + (weights::weight(acc.0.param,acc.1) >> 1)
-                        });
-                        //);
-                        node.0.connections.iter().map(|out_connection|{
-                            (self.get_node(out_connection.output_node), vec![(out_connection, broadcast_signal)])
-                        }).collect::<Vec<(&node, Vec<(&connection, u8)>)>>()
-                    })
-                    .flatten()
-                    // add halted nodes
-                    .chain(halted_nodes.into_par_iter())
-                    .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
-                    ready_nodes.par_sort_by(|node_a, node_b| {
-                        Ord::cmp(&node_a.0.id, &node_b.0.id)
-                    });
+        //         // propagate ready nodes
+        //         ready_nodes = ready_nodes.iter()
+        //             // .inspect(|activation| println!("activating: {:?}",activation))
+        //             .map(|node| {
+        //                 // get the broadcast signal from this node
+        //                 let broadcast_signal =
+        //                 // @DEPRECATED: or justify
+        //                 //activations::cond_rot_act(
+        //                 // NOTE: this is not parallelized here due to associative property
+        //                 node.1.iter().fold(0,|res,acc|{
+        //                     (res >> 1) + (weights::weight(acc.0.param,acc.1) >> 1)
+        //                 });
+        //                 //);
+        //                 node.0.borrow().connections.iter().map(|out_connection|{
+        //                     //(self.get_node(out_connection.output_node.id), vec![(out_connection, broadcast_signal)])
+        //                     (out_connection.output_node, vec![(out_connection, broadcast_signal)])
+        //                 }).collect::<Vec<(&RefCell<node>, Vec<(&connection, u8)>)>>()
+        //             })
+        //             .flatten()
+        //             // add halted nodes
+        //             .chain(halted_nodes.into_iter())
+        //             .collect::<Vec<(&RefCell<node>, Vec<(&connection, u8)>)>>();
+        //             ready_nodes.sort_by(|node_a, node_b| {
+        //                 Ord::cmp(&node_a.0.borrow().id, &node_b.0.borrow().id)
+        //             });
 
-                    // TODO: all of this should be parallel? this may be really fast anyways
-                    //      would like to remove clone here so may rework
-                    buffer = ready_nodes.iter().group_by(|node| node.0.id)
-                    .into_iter()
-                    .map(|(key, group)| {
-                        (
-                            self.get_node(key),
-                            group
-                                .into_iter()
-                                .map(|group_node| {
-                                    group_node.1.clone()
-                                })
-                                .flatten()
-                                .collect::<Vec<(&connection, u8)>>(),
-                        )
-                    })
-                    .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
-            }
+        //             // TODO: all of this should be parallel? this may be really fast anyways
+        //             //      would like to remove clone here so may rework
+        //             buffer = ready_nodes.iter().group_by(|node| node.0.borrow().id)
+        //             .into_iter()
+        //             .map(|(key, group)| {
+        //                 (
+        //                     self.get_node(key),
+        //                     group
+        //                         .into_iter()
+        //                         .map(|group_node| {
+        //                             group_node.1.clone()
+        //                         })
+        //                         .flatten()
+        //                         .collect::<Vec<(&connection, u8)>>(),
+        //                 )
+        //             })
+        //             .collect::<Vec<(&RefCell<node>, Vec<(&connection, u8)>)>>();
+        //     }
 
-            // now sum-normalize and activate the output vector
-                buffer.par_sort_by(|node_a, node_b| {
-                    Ord::cmp(node_a.0, node_b.0)
-                });
-                buffer
-                .iter()
-                .group_by(|node| node.0)
-                .into_iter()
-                .map(|(_key,group)|
-                group.into_iter().collect::<Vec<&(&node, Vec<(&connection,u8)>)>>())
-                .collect::<Vec<Vec<&(&node,Vec<(&connection, u8)>)>>>()
+        //     // now sum-normalize and activate the output vector
+        //         buffer.sort_by(|node_a, node_b| {
+        //             Ord::cmp(&node_a.0.borrow().id, &node_b.0.borrow().id)
+        //         });
+        //         buffer
+        //         .iter()
+        //         .group_by(|node| node.0.borrow().id)
+        //         .into_iter()
+        //         .map(|(_key,group)|
+        //         group.into_iter().collect::<Vec<&(&RefCell<node>, Vec<(&connection,u8)>)>>())
+        //         .collect::<Vec<Vec<&(&RefCell<node>,Vec<(&connection, u8)>)>>>()
 
-                .into_par_iter()
-                .map(|group| {
-                    //activations::cond_rot_act(
-                        group
-                            .into_iter()
-                            .map(|node| {
-                                node.1.iter().map(
-                                    |connection_signal| {
-                                        connection_signal.1
-                                    },
-                                )
-                            })
-                            .flatten()
-                            // TODO: is this associative/parallelizable? me thinks no
-                            // NOTE: this is not parallelized
-                            .fold(0, |acc, res| {
-                                (acc >> 1) + (res >> 1)
-                            })
-                    //)
-                })
-                .collect()
-        }
+        //         .into_iter()
+        //         .map(|group| {
+        //             //activations::cond_rot_act(
+        //                 group
+        //                     .into_iter()
+        //                     .map(|node| {
+        //                         node.1.iter().map(
+        //                             |connection_signal| {
+        //                                 connection_signal.1
+        //                             },
+        //                         )
+        //                     })
+        //                     .flatten()
+        //                     // TODO: is this associative/parallelizable? me thinks no
+        //                     // NOTE: this is not parallelized
+        //                     .fold(0, |acc, res| {
+        //                         (acc >> 1) + (res >> 1)
+        //                     })
+        //             //)
+        //         })
+        //         .collect()
+        // }
 
-        /// check if all connections for a
-        /// node exist in a (connection,signal) buffer
-        ///
-        /// cur_in_connections: current in connections in a buffer
-        ///                     including this nodes in connections
-        /// node: the node being compared.
-        pub fn node_ready_comparator(
-            &self,
-            node: &node,
-            cur_in_connections: &Vec<(&connection, u8)>,
-        ) -> bool {
-            // all in_connections for this node
-            let in_connections = self.get_in_connections(node.id);
+        //@DEPRECATED
+        // check if all connections for a
+        // node exist in a (connection,signal) buffer
+        //
+        // cur_in_connections: current in connections in a buffer
+        //                     including this nodes in connections
+        // node: the node being compared.
+        // pub fn node_ready_comparator(
+        //     &self,
+        //     node: &node,
+        //     cur_in_connections: &Vec<(&connection, u8)>,
+        // ) -> bool {
+        //     // all in_connections for this node
+        //     let in_connections = self.get_in_connections(node.id);
 
-            let is_output =
-                self.outputs.iter().any(|output| *output == node.id);
+        //     let is_output =
+        //         self.outputs.iter().any(|output| *output == node.id);
 
-            (in_connections.len() == cur_in_connections.len())
-                && !is_output
-        }
+        //     (in_connections.len() == cur_in_connections.len())
+        //         && !is_output
+        // // }
     }
 
     // TRAITS //
@@ -964,14 +1091,22 @@ pub mod psyclones {
             let mut buffer = "".to_string();
 
             self.tensor.iter().for_each(|node| {
-                buffer += &node.id.to_string();
+                buffer += &node.lock().unwrap().id.to_string();
                 buffer += &format!("->").to_string();
                 buffer += "|";
                 buffer += &node
+                    .lock()
+                    .unwrap()
                     .connections
                     .iter()
                     .map(|connection| {
-                        connection.output_node.to_string() + "|"
+                        connection
+                            .output_node
+                            .lock()
+                            .unwrap()
+                            .id
+                            .to_string()
+                            + "|"
                     })
                     .collect::<String>()
                     .to_string();

@@ -113,13 +113,16 @@ fn main() {
 
     println!("Hello, world!");
     let mut rot_net = rot_net::initialize_network(3, 4);
-    for i in 0..10 {
+    println!("initialized network..");
+    println!("adding nodes..");
+    for i in 0..4000 {
         rot_net.random_node();
     }
-    for i in 0..10 {
+    println!("adding connections..");
+    for i in 0..10000 {
         rot_net.random_connection(3);
     }
-    println!("rot_net construction finished.. {}", rot_net);
+    println!("rot_net construction finished..");
 
     // rot_net.add_connection(5, 7);
     // println!("with new node: {}", rot_net);
@@ -132,24 +135,26 @@ fn main() {
     //rot_net.add_connection(4, 4);
     //println!("with new connection {}", rot_net);
 
-    let signals =
-        vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()];
-    let output_signals = rot_net.forward_propagate(signals.clone());
+    // let signals =
+    //     vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()];
+    // let output_signals = rot_net.forward_propagate(signals.clone());
 
     //timeit!({
     //    rot_net.forward_propagate(signals.clone());
     //});
     //NOTE: initial nodeIds are out of order
-    println!(
-        "forward propagating {:?} returned {:?}",
-        signals.clone(),
-        output_signals
-    );
+    // println!(
+    //     "forward propagating {:?} returned {:?}",
+    //     signals.clone(),
+    //     output_signals
+    // );
 
-    println!("{}", rot_net);
-    let time = timeit_loops!(10000, {
-        rot_net.forward_propagate(signals.clone());
-    });
+    // let time = timeit_loops!(10, {
+    //     rot_net.forward_propagate(signals.clone());
+    // });
+
     let size = std::mem::size_of_val(&rot_net);
-    println!("rot_net clocked @ {} \n with {} bytes", time, size);
+    // TODO: size is wrong but funny
+    // println!("rot_net clocked @ {} \n with {} bytes", time, size);
+    println!("rot_net with {} bytes", size);
 }
