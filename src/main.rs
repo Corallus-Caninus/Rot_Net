@@ -123,9 +123,6 @@ fn main() {
     // for i in 0..10000 {
     //     rot_net.random_connection(3);
     // }
-    loop{
-        println!("rot_net construction finished..{}", rot_net);
-    }
 
     // rot_net.add_connection(5, 7);
     // println!("with new node: {}", rot_net);

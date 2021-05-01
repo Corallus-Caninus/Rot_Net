@@ -18,7 +18,7 @@ pub mod psyclones {
     use std::fmt;
     use std::ops::Index;
     use std::string::String;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, Weak};
 
     // NETWORK FUNCTIONS //
     /// linearly approximated activation functions and their
@@ -441,7 +441,7 @@ pub mod psyclones {
         // TODO: get rid of this Arc and use data-parallelism
         // TODO: this should be weak but lives as long as self
         //       since nodes arent pruned
-        output_node: Arc<Mutex<node>>,
+        output_node: Weak<Mutex<node>>,
         // the ID of this connection
         innovation: usize,
         param: u8,
@@ -567,7 +567,7 @@ pub mod psyclones {
                 };
                 for output in 0..outputs {
                     let new_connection = connection {
-                        output_node: tensor[output].clone(),
+                        output_node: Arc::downgrade(&tensor[output]),
                         innovation: innovation_counter,
                         param: rng.gen::<u8>(),
                     };
@@ -656,12 +656,14 @@ pub mod psyclones {
                 .connections
                 .iter()
                 .map(|connection| connection.output_node.clone())
-                .unique_by(|node| node.lock().unwrap().id)
+                .unique_by(|node| {
+                    node.upgrade().unwrap().lock().unwrap().id
+                })
                 // this is fine since connection is clone of Arc
-                .collect::<Vec<Arc<Mutex<node>>>>();
+                .collect::<Vec<Weak<Mutex<node>>>>();
 
             if next.par_iter().any(|node| {
-                let id = node.lock().unwrap().id;
+                let id = node.upgrade().unwrap().lock().unwrap().id;
                 (id == input_node_id) || (id == output_node_id)
             }) {
                 // NOTE: the proposed connection will create a cycle so we silently ignore
@@ -675,21 +677,26 @@ pub mod psyclones {
             while next.len() != 0 {
                 next = next
                     .into_iter()
-                    .unique_by(|node| node.lock().unwrap().id)
+                    .unique_by(|node| {
+                        node.upgrade().unwrap().lock().unwrap().id
+                    })
                     .par_bridge()
                     .map(|node| {
-                        node.lock()
+                        node.upgrade()
+                            .unwrap()
+                            .lock()
                             .unwrap()
                             .connections
                             .iter()
                             .map(|edge| edge.output_node.clone())
-                            .collect::<Vec<Arc<Mutex<node>>>>()
+                            .collect::<Vec<Weak<Mutex<node>>>>()
                     })
                     .flatten()
-                    .collect::<Vec<Arc<Mutex<node>>>>();
+                    .collect::<Vec<Weak<Mutex<node>>>>();
 
                 if next.par_iter().any(|node| {
-                    let id = node.lock().unwrap().id;
+                    let id =
+                        node.upgrade().unwrap().lock().unwrap().id;
                     (id == input_node_id) || (id == output_node_id)
                 }) {
                     // NOTE: the proposed connection will create a cycle so we silently ignore
@@ -705,7 +712,7 @@ pub mod psyclones {
             // add the connection to the output node
             let mut output_node = self.get_node(output_node_id);
             let new_connection = connection {
-                output_node: output_node.clone(),
+                output_node: Arc::downgrade(&output_node),
                 innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
             };
@@ -754,7 +761,7 @@ pub mod psyclones {
             // graph
             self.innovation_counter += 1;
             let new_input = connection {
-                output_node: new_node.clone(),
+                output_node: Arc::downgrade(&new_node),
                 innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
             };
@@ -777,6 +784,8 @@ pub mod psyclones {
             new_node.lock().unwrap().connections.push(new_output);
             // add the new out_connection to output_node
             output_node
+                .upgrade()
+                .unwrap()
                 .lock()
                 .unwrap()
                 .input_connections
@@ -1103,6 +1112,8 @@ pub mod psyclones {
                     .map(|connection| {
                         connection
                             .output_node
+                            .upgrade()
+                            .unwrap()
                             .lock()
                             .unwrap()
                             .id
