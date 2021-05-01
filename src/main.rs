@@ -114,15 +114,18 @@ fn main() {
     println!("Hello, world!");
     let mut rot_net = rot_net::initialize_network(3, 4);
     println!("initialized network..");
-    println!("adding nodes..");
+    // println!("adding nodes..");
     for i in 0..4000 {
         rot_net.random_node();
-    }
-    println!("adding connections..");
-    for i in 0..10000 {
         rot_net.random_connection(3);
     }
-    println!("rot_net construction finished..");
+    // println!("adding connections..");
+    // for i in 0..10000 {
+    //     rot_net.random_connection(3);
+    // }
+    loop{
+        println!("rot_net construction finished..{}", rot_net);
+    }
 
     // rot_net.add_connection(5, 7);
     // println!("with new node: {}", rot_net);

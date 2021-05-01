@@ -437,10 +437,10 @@ pub mod psyclones {
         // TODO: Arc Mutex is slow and bloated.
         //       would prefer data parallel locality instead
         //       if this is only addressing based solution
-        // NOTE: this representation is for architecture search.
-        //       Since param can represent a residual flag in MSB this should
-        //       be used to produce a Vec<Vec<u8>> vector of layer operations
-        //       for forward propagation.
+
+        // TODO: get rid of this Arc and use data-parallelism
+        // TODO: this should be weak but lives as long as self
+        //       since nodes arent pruned
         output_node: Arc<Mutex<node>>,
         // the ID of this connection
         innovation: usize,
@@ -635,10 +635,10 @@ pub mod psyclones {
             input_node_id: usize,
             output_node_id: usize,
         ) {
-            // println!(
-            //     "adding connection..{} {}",
-            //     input_node_id, output_node_id
-            // );
+            println!(
+                "adding connection..{} {}",
+                input_node_id, output_node_id
+            );
             let mut rng = rand::thread_rng();
 
             if input_node_id == output_node_id {
@@ -660,7 +660,7 @@ pub mod psyclones {
                 // this is fine since connection is clone of Arc
                 .collect::<Vec<Arc<Mutex<node>>>>();
 
-            if next.iter().any(|node| {
+            if next.par_iter().any(|node| {
                 let id = node.lock().unwrap().id;
                 (id == input_node_id) || (id == output_node_id)
             }) {
@@ -676,6 +676,7 @@ pub mod psyclones {
                 next = next
                     .into_iter()
                     .unique_by(|node| node.lock().unwrap().id)
+                    .par_bridge()
                     .map(|node| {
                         node.lock()
                             .unwrap()
@@ -687,7 +688,7 @@ pub mod psyclones {
                     .flatten()
                     .collect::<Vec<Arc<Mutex<node>>>>();
 
-                if next.iter().any(|node| {
+                if next.par_iter().any(|node| {
                     let id = node.lock().unwrap().id;
                     (id == input_node_id) || (id == output_node_id)
                 }) {
