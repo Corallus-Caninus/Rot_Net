@@ -18,7 +18,7 @@ pub mod psyclones {
     use std::fmt;
     use std::ops::Index;
     use std::string::String;
-    use std::sync::{Arc, Mutex, Weak};
+    use std::sync::{Arc, Mutex, RwLock, Weak};
 
     // NETWORK FUNCTIONS //
     /// linearly approximated activation functions and their
@@ -434,15 +434,17 @@ pub mod psyclones {
     #[derive(Clone, Debug)]
     pub struct connection {
         // the ID of the node this connection goes to.
-        // TODO: Arc Mutex is slow and bloated.
+        // TODO: Arc RwLock is slow and bloated.
         //       would prefer data parallel locality instead
         //       if this is only addressing based solution
 
         // TODO: get rid of this Arc and use data-parallelism
         // TODO: this should be weak but lives as long as self
         //       since nodes arent pruned
-        output_node: Weak<Mutex<node>>,
+        output_node: Weak<RwLock<node>>,
         // the ID of this connection
+        // TODO: may use Weak<RwLock<node>> for backprop and resort
+        //       to split_depth processing for similarity
         innovation: usize,
         param: u8,
     }
@@ -511,9 +513,13 @@ pub mod psyclones {
     #[derive(Clone)] //TODO: where is this called it is potentially very
                      // costly.
     pub struct rot_net {
-        pub tensor: Vec<Arc<Mutex<node>>>,
+        pub tensor: Vec<Arc<RwLock<node>>>,
+        // these are convenience variables
+        // (they take relatively no space at scale)
         // the output node id's
         pub outputs: Vec<usize>,
+        // the input node id's
+        pub inputs: Vec<usize>,
         // current max_innovation prevents having to
         // count each time a connection is added *for the low low cost of 1 usize!*
         pub innovation_counter: usize,
@@ -527,11 +533,12 @@ pub mod psyclones {
             let mut rng = rand::thread_rng();
             let mut tensor = vec![];
             let mut innovation_counter = 0;
+            let mut output_vector = vec![];
+            let mut input_vector = vec![];
 
             // add the output connections one time
             // TODO: rework this order of operations for
             // readability
-            let mut output_vector = vec![];
             for output in 0..outputs {
                 let mut new_node = node {
                     id: output,
@@ -546,7 +553,7 @@ pub mod psyclones {
                         .input_connections
                         .push(innovation_counter);
                 }
-                tensor.push(Arc::new(Mutex::new(new_node)));
+                tensor.push(Arc::new(RwLock::new(new_node)));
                 output_vector.push(output);
             }
 
@@ -565,6 +572,7 @@ pub mod psyclones {
                     connections: vec![],
                     input_connections: vec![],
                 };
+                input_vector.push(input+outputs);
                 for output in 0..outputs {
                     let new_connection = connection {
                         output_node: Arc::downgrade(&tensor[output]),
@@ -578,10 +586,11 @@ pub mod psyclones {
                     );
                     innovation_counter += 1;
                 }
-                tensor.push(Arc::new(Mutex::new(new_node)));
+                tensor.push(Arc::new(RwLock::new(new_node)));
             }
             rot_net {
                 tensor: tensor,
+                inputs: input_vector,
                 outputs: output_vector,
                 innovation_counter: innovation_counter,
             }
@@ -599,11 +608,11 @@ pub mod psyclones {
         // }
         /// returns an immutable reference to a node in the
         /// network given the node id
-        pub fn get_node(&self, index: usize) -> Arc<Mutex<node>> {
+        pub fn get_node(&self, index: usize) -> Arc<RwLock<node>> {
             // TODO: output nodes arent considered in this
             self.tensor
                 .iter()
-                .find(|node| node.lock().unwrap().id == index)
+                .find(|node| node.read().unwrap().id == index)
                 .unwrap()
                 .clone()
         }
@@ -641,29 +650,39 @@ pub mod psyclones {
             );
             let mut rng = rand::thread_rng();
 
-            if input_node_id == output_node_id {
+            if input_node_id == output_node_id
+                || self
+                    .inputs
+                    .iter()
+                    .any(|input| *input == output_node_id)
+                || self
+                    .outputs
+                    .iter()
+                    .any(|output| *output == input_node_id)
+            {
                 return; // loop
-            };
+            }
 
             let output_node = self.get_node(output_node_id);
 
             // TODO: verify this detects cycles
+            // TODO: input intra-extrema connections not caught
             // walk routine: this should work for all cases: loop, cycle, output-input (extrema) edges in a graph
             //               also should prevent output->hidden connections leaving outputs with connection.len() == 0
             let mut next = output_node
-                .lock()
+                .read()
                 .unwrap()
                 .connections
                 .iter()
                 .map(|connection| connection.output_node.clone())
                 .unique_by(|node| {
-                    node.upgrade().unwrap().lock().unwrap().id
+                    node.upgrade().unwrap().read().unwrap().id
                 })
                 // this is fine since connection is clone of Arc
-                .collect::<Vec<Weak<Mutex<node>>>>();
+                .collect::<Vec<Weak<RwLock<node>>>>();
 
             if next.par_iter().any(|node| {
-                let id = node.upgrade().unwrap().lock().unwrap().id;
+                let id = node.upgrade().unwrap().read().unwrap().id;
                 (id == input_node_id) || (id == output_node_id)
             }) {
                 // NOTE: the proposed connection will create a cycle so we silently ignore
@@ -678,25 +697,25 @@ pub mod psyclones {
                 next = next
                     .into_iter()
                     .unique_by(|node| {
-                        node.upgrade().unwrap().lock().unwrap().id
+                        node.upgrade().unwrap().read().unwrap().id
                     })
                     .par_bridge()
                     .map(|node| {
                         node.upgrade()
                             .unwrap()
-                            .lock()
+                            .read()
                             .unwrap()
                             .connections
                             .iter()
                             .map(|edge| edge.output_node.clone())
-                            .collect::<Vec<Weak<Mutex<node>>>>()
+                            .collect::<Vec<Weak<RwLock<node>>>>()
                     })
                     .flatten()
-                    .collect::<Vec<Weak<Mutex<node>>>>();
+                    .collect::<Vec<Weak<RwLock<node>>>>();
 
                 if next.par_iter().any(|node| {
                     let id =
-                        node.upgrade().unwrap().lock().unwrap().id;
+                        node.upgrade().unwrap().read().unwrap().id;
                     (id == input_node_id) || (id == output_node_id)
                 }) {
                     // NOTE: the proposed connection will create a cycle so we silently ignore
@@ -717,14 +736,14 @@ pub mod psyclones {
                 param: rng.gen::<u8>(),
             };
             output_node
-                .lock()
+                .write()
                 .unwrap()
                 .input_connections
                 .push(self.innovation_counter);
             // add the connection to the input node
             let mut input_node = self.get_node(input_node_id);
             input_node
-                .lock()
+                .write()
                 .unwrap()
                 .connections
                 .push(new_connection);
@@ -742,7 +761,7 @@ pub mod psyclones {
         ) {
             let mut rng = rand::thread_rng();
 
-            let mut new_node = Arc::new(Mutex::new(node {
+            let mut new_node = Arc::new(RwLock::new(node {
                 id: cur_node_id,
                 connections: vec![],
                 input_connections: vec![],
@@ -752,7 +771,7 @@ pub mod psyclones {
             // get the connection's vertices from the graph
             let input_node = self.get_node(node_index);
             let output_node =
-                input_node.lock().unwrap().connections.clone()
+                input_node.read().unwrap().connections.clone()
                     [connection_index]
                     .output_node
                     .clone();
@@ -765,10 +784,10 @@ pub mod psyclones {
                 innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
             };
-            input_node.lock().unwrap().connections.push(new_input);
+            input_node.write().unwrap().connections.push(new_input);
             // add the new input_connection to new_node
             new_node
-                .lock()
+                .write()
                 .unwrap()
                 .input_connections
                 .push(self.innovation_counter);
@@ -780,13 +799,13 @@ pub mod psyclones {
                 innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
             };
-            // TODO: does this deadlock?
-            new_node.lock().unwrap().connections.push(new_output);
+            // TODO: does this deadread?
+            new_node.write().unwrap().connections.push(new_output);
             // add the new out_connection to output_node
             output_node
                 .upgrade()
                 .unwrap()
-                .lock()
+                .write()
                 .unwrap()
                 .input_connections
                 .push(self.innovation_counter);
@@ -802,7 +821,7 @@ pub mod psyclones {
             let connection_select = rng.gen_range(
                 0..self
                     .get_node(node_select)
-                    .lock()
+                    .read()
                     .unwrap()
                     .connections
                     .len(),
@@ -863,217 +882,245 @@ pub mod psyclones {
         // values. signals are signals arriving at each
         // input node there should be one signal
         // per input node.
-        // pub fn forward_propagate(&self, signals: Vec<u8>) -> Vec<u8> {
-        //     // TODO: assert vector
-        //     // dimensions are appropriate for this
-        //     // network: self.input_nodes.len == signals.len
-        //     // TODO: remove .clone, .cloned and .collect
-
-        //     // Since this is a nodal representation of neural network
-        //     // data structure the buffer is associated signals with
-        //     // nodes (ready to broadcast)
-        //     let initialization = self
-        //         .tensor
-        //         .iter()
-        //         .take(signals.len())
-        //         .zip(signals)
-        //         .collect::<Vec<(&RefCell<node>, u8)>>();
-
-        //     //println!(
-        //     //"FORWARD_PROP initialized: {:?}\n",
-        //     //initialization
-        //     //);
-
-        //     // TODO: rework to have buffer entries be (nodeid, Vec<input_connections, signals>)
-        //     //       stop when all nodeids are output nodes and perform one last sum outside
-        //     //       loop then return. dont overthink it.
-
-        //     // perform the initial broadcast (without activation)
-        //     let mut buffer = initialization
-        //         .iter()
-        //         // TODO: this is supposed to be output_connection.output_node node node.0.id
-        //         .map(|node| {
-        //             //(node.0, vec![(node.0.id, node.1)])
-        //             node.0.borrow().connections.iter().map(
-        //                 move |connection_param| {
-        //                     (
-        //                         self.get_node(
-        //                             connection_param.output_node.id,
-        //                         ),
-        //                         vec![(
-        //                             connection_param,
-        //                             weights::weight(node.1, connection_param.param),
-        //                         )],
-        //                     )
-        //                 },
-        //             )
-        //         })
-        //         .flatten()
-        //         // TODO: this is complicated enough to justify a
-        //         //       data structure or anonymous data structure instead of tuple
-        //         .collect::<Vec<(RefCell<node>, Vec<(&connection, u8)>)>>();
-
-        //     // TODO: integrate this and above into one bootstrap step
-        //     // resort into node groups
-        //     buffer = buffer
-        //         .iter()
-        //         .group_by(|node| node.0.borrow().id)
-        //         .into_iter()
-        //         .map(|(key, group)| {
-        //             // collapse into one node
-        //             (
-        //                 self.get_node(key).borrow(),
-        //                 group
-        //                     .into_iter()
-        //                     .map(|node| node.1.clone())
-        //                     .flatten()
-        //                     .collect::<Vec<(&connection, u8)>>(),
-        //             )
-        //         })
-        //         .collect::<Vec<(&node, Vec<(&connection, u8)>)>>();
-
-        //     //println!(
-        //     //"FORWARD_PROP sorted with buffer: {:?}\n",
-        //     //buffer
-        //     //);
-
-        //     // performs sum-normalize, activation, and next_node weighting per iteration
-        //     // to maximize operations per address indirection and ready_node lookup
-        //     while !buffer.iter().all(|node| {
-        //         self.outputs.iter().any(|output| node.0.borrow().id == *output)
-        //     }) {
-        //         //println!("BUFFER: {:?}\n", buffer);
-
-        //         // NOTE: this is actually really good for hoisting from for loop
-        //         //       iff vec macro initializes allocation here
-
-        //         // let mut ready_nodes = Mutex::new(Vec::new());
-        //         // let mut halted_nodes = Mutex::new(Vec::new());
-        //         let mut ready_nodes = Vec::new();
-        //         let mut halted_nodes = Vec::new();
-
-        //         // check if nodes are ready to propagate
-        //         // TODO: rework this better now that ready is a local search
-        //         //       in buffer not tensor
-        //         // short-circuiting node-local search
-        //         buffer.iter().for_each(|node|{
-        //             //if self.node_ready_comparator(node.0.borrow(), &node.1) {
-        //             if node.0.borrow().input_connections.iter().all(|input_connection|{
-        //                 node.1.iter().any(|buffer_connection|{
-        //                     *input_connection == buffer_connection.0.innovation
-        //                 })
-        //             }){
-        //                 ready_nodes.push(node.to_owned());
-        //             } else {
-        //                 halted_nodes.push(node.to_owned());
-        //             }
-        //         });
-        //         // let mut ready_nodes: Vec<(&node, Vec<(&connection, u8)>)> = ready_nodes.lock().unwrap().into();
-        //         // let mut halted_nodes = halted_nodes.lock().unwrap().into();
-
-        //         // println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
-
-        //         // propagate ready nodes
-        //         ready_nodes = ready_nodes.iter()
-        //             // .inspect(|activation| println!("activating: {:?}",activation))
-        //             .map(|node| {
-        //                 // get the broadcast signal from this node
-        //                 let broadcast_signal =
-        //                 // @DEPRECATED: or justify
-        //                 //activations::cond_rot_act(
-        //                 // NOTE: this is not parallelized here due to associative property
-        //                 node.1.iter().fold(0,|res,acc|{
-        //                     (res >> 1) + (weights::weight(acc.0.param,acc.1) >> 1)
-        //                 });
-        //                 //);
-        //                 node.0.borrow().connections.iter().map(|out_connection|{
-        //                     //(self.get_node(out_connection.output_node.id), vec![(out_connection, broadcast_signal)])
-        //                     (out_connection.output_node, vec![(out_connection, broadcast_signal)])
-        //                 }).collect::<Vec<(&RefCell<node>, Vec<(&connection, u8)>)>>()
-        //             })
-        //             .flatten()
-        //             // add halted nodes
-        //             .chain(halted_nodes.into_iter())
-        //             .collect::<Vec<(&RefCell<node>, Vec<(&connection, u8)>)>>();
-        //             ready_nodes.sort_by(|node_a, node_b| {
-        //                 Ord::cmp(&node_a.0.borrow().id, &node_b.0.borrow().id)
-        //             });
-
-        //             // TODO: all of this should be parallel? this may be really fast anyways
-        //             //      would like to remove clone here so may rework
-        //             buffer = ready_nodes.iter().group_by(|node| node.0.borrow().id)
-        //             .into_iter()
-        //             .map(|(key, group)| {
-        //                 (
-        //                     self.get_node(key),
-        //                     group
-        //                         .into_iter()
-        //                         .map(|group_node| {
-        //                             group_node.1.clone()
-        //                         })
-        //                         .flatten()
-        //                         .collect::<Vec<(&connection, u8)>>(),
-        //                 )
-        //             })
-        //             .collect::<Vec<(&RefCell<node>, Vec<(&connection, u8)>)>>();
-        //     }
-
-        //     // now sum-normalize and activate the output vector
-        //         buffer.sort_by(|node_a, node_b| {
-        //             Ord::cmp(&node_a.0.borrow().id, &node_b.0.borrow().id)
-        //         });
-        //         buffer
-        //         .iter()
-        //         .group_by(|node| node.0.borrow().id)
-        //         .into_iter()
-        //         .map(|(_key,group)|
-        //         group.into_iter().collect::<Vec<&(&RefCell<node>, Vec<(&connection,u8)>)>>())
-        //         .collect::<Vec<Vec<&(&RefCell<node>,Vec<(&connection, u8)>)>>>()
-
-        //         .into_iter()
-        //         .map(|group| {
-        //             //activations::cond_rot_act(
-        //                 group
-        //                     .into_iter()
-        //                     .map(|node| {
-        //                         node.1.iter().map(
-        //                             |connection_signal| {
-        //                                 connection_signal.1
-        //                             },
-        //                         )
-        //                     })
-        //                     .flatten()
-        //                     // TODO: is this associative/parallelizable? me thinks no
-        //                     // NOTE: this is not parallelized
-        //                     .fold(0, |acc, res| {
-        //                         (acc >> 1) + (res >> 1)
-        //                     })
-        //             //)
-        //         })
-        //         .collect()
-        // }
-
-        //@DEPRECATED
-        // check if all connections for a
-        // node exist in a (connection,signal) buffer
+        pub fn forward_propagate(&self, signals: Vec<u8>) -> Vec<u8> {
+            // TODO: assert vector
+            // dimensions are appropriate for this
+            // network: self.input_nodes.len == signals.len
+            // TODO: remove .clone, .cloned and .collect
+            //
+            // Since this is a nodal representation of neural network
+            // data structure the buffer is associated signals with
+            // nodes (ready to broadcast)
+            let initialization = self
+                .tensor
+                .iter()
+                .skip(self.outputs.len())
+                .take(signals.len())
+                .zip(signals)
+                .collect::<Vec<(&Arc<RwLock<node>>, u8)>>();
+            println!(
+                "FORWARD_PROP initialized: {:?}\n",
+                initialization
+            );
+            //
+            // TODO: rework to have buffer entries be (nodeid, Vec<input_connections, signals>)
+            //       stop when all nodeids are output nodes and perform one last sum outside
+            //       loop then return. dont overthink it.
+            //
+            // perform the initial broadcast (without activation)
+            let mut buffer = initialization
+                .iter()
+                // TODO: this is supposed to be output_connection.output_node node node.0.id
+                .map(|node| {
+                    //(node.0, vec![(node.0.id, node.1)])
+                    node.0.read().unwrap().connections.clone().into_iter().map(
+                        move |connection_param| {
+                            (
+                                self.get_node(
+                                    connection_param.output_node.upgrade().unwrap().read().unwrap().id.clone(),
+                                ),
+                                vec![(
+                                    connection_param.clone(),
+                                    weights::weight(node.1, connection_param.param.clone()),
+                                )],
+                            )
+                        },
+                    )
+                })
+                .flatten()
+                // TODO: this is complicated enough to justify a
+                //       data structure or anonymous data structure instead of tuple
+                .collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>();
+            println!("initial broadcast complete:{:?}", buffer);
+            //
+            // TODO: integrate this and above into one bootstrap step
+            // resort into node groups
+            buffer = buffer
+                .iter()
+                .group_by(|node| node.0.read().unwrap().id)
+                .into_iter()
+                .map(|(key, group)| {
+                    // collapse into one node
+                    (
+                        self.get_node(key),
+                        group
+                            .into_iter()
+                            .map(|node| node.1.clone())
+                            .flatten()
+                            .collect::<Vec<(connection, u8)>>(),
+                    )
+                })
+                .collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>();
+            println!(
+                "FORWARD_PROP sorted with buffer: {:?}\n",
+                buffer
+            );
+            //
+            // performs sum-normalize, activation, and next_node weighting per iteration
+            // to maximize operations per address indirection and ready_node lookup
+            while !buffer.iter().all(|node| {
+                self.outputs.iter().any(|output| {
+                    node.0.read().unwrap().id == *output
+                })
+            }) {
+                //println!("BUFFER: {:?}\n", buffer);
+                //
+                // NOTE: this is actually really good for hoisting from for loop
+                //       iff vec macro initializes allocation here
+                //
+                // let mut ready_nodes = RwLock::new(Vec::new());
+                // let mut halted_nodes = RwLock::new(Vec::new());
+                let mut ready_nodes = Vec::new();
+                let mut halted_nodes = Vec::new();
+                //
+                // check if nodes are ready to propagate
+                // TODO: rework this better now that ready is a local search
+                //       in buffer not tensor
+                // short-circuiting node-local search
+                // println!(
+                //     "{} {:?} {:?}",
+                //     self, self.outputs, self.inputs
+                // );
+                buffer.iter().for_each(|node| {
+                    // println!("NODE: {}", node.0.read().unwrap().id);
+                    //if self.node_ready_comparator(node.0.borrow(), &node.1) {
+                    if node
+                        .0
+                        .read()
+                        .unwrap()
+                        .input_connections
+                        .par_iter()
+                        .all(|input_connection| {
+                            node.1.iter().any(|buffer_connection| {
+                                *input_connection
+                                    == buffer_connection.0.innovation
+                            })
+                        })
+                    {
+                        ready_nodes.push(node.to_owned());
+                    } else {
+                        halted_nodes.push(node.to_owned());
+                    }
+                });
+                // let mut ready_nodes: Vec<(&node, Vec<(&connection, u8)>)> = ready_nodes.read().unwrap().into();
+                // let mut halted_nodes = halted_nodes.read().unwrap().into();
+                //
+                // println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
+                //
+                // propagate ready nodes
+                ready_nodes = ready_nodes.par_iter()
+                    // .inspect(|activation| println!("activating: {:?}",activation))
+                    .map(|node| {
+                        // get the broadcast signal from this node
+                        let broadcast_signal =
+                        // @DEPRECATED: or justify
+                        //activations::cond_rot_act(
+                        // NOTE: this is not parallelized here due to associative property
+                        node.1.iter().fold(0,|res,acc|{
+                            (res >> 1) + (weights::weight(acc.0.param,acc.1) >> 1)
+                        });
+                        //);
+                        node.0.read().unwrap().connections.iter().map(|out_connection|{
+                            //(self.get_node(out_connection.output_node.id), vec![(out_connection, broadcast_signal)])
+                            (out_connection.output_node.upgrade().unwrap(), vec![(out_connection.clone(), broadcast_signal)])
+                        }).collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>()
+                    })
+                    .flatten()
+                    // add halted nodes
+                    .chain(halted_nodes.into_par_iter())
+                    .collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>();
+                ready_nodes.sort_by(|node_a, node_b| {
+                    Ord::cmp(
+                        &node_a.0.read().unwrap().id,
+                        &node_b.0.read().unwrap().id,
+                    )
+                });
+                //
+                // TODO: all of this should be parallel? this may be really fast anyways
+                //      would like to remove clone here so may rework
+                buffer =
+                    ready_nodes
+                        .iter()
+                        .group_by(|node| node.0.read().unwrap().id)
+                        .into_iter()
+                        .map(|(key, group)| {
+                            (
+                                self.get_node(key),
+                                group
+                                    .into_iter()
+                                    .map(|group_node| {
+                                        group_node.1.clone()
+                                    })
+                                    .flatten()
+                                    .collect::<Vec<(connection, u8)>>(
+                                    ),
+                            )
+                        })
+                        .collect::<Vec<(
+                            Arc<RwLock<node>>,
+                            Vec<(connection, u8)>,
+                        )>>();
+            }
+            //
+            // now sum-normalize and activate the output vector
+            buffer.sort_by(|node_a, node_b| {
+                Ord::cmp(
+                    &node_a.0.read().unwrap().id,
+                    &node_b.0.read().unwrap().id,
+                )
+            });
+            buffer
+                .iter()
+                .group_by(|node| node.0.read().unwrap().id)
+                .into_iter()
+                .map(|(_key,group)|
+                group.into_iter().collect::<Vec<&(Arc<RwLock<node>>, Vec<(connection,u8)>)>>())
+                .collect::<Vec<Vec<&(Arc<RwLock<node>>,Vec<(connection, u8)>)>>>()
+// 
+                .into_par_iter()
+                .map(|group| {
+                    //activations::cond_rot_act(
+                        group
+                            .into_iter()
+                            .map(|node| {
+                                node.1.iter().map(
+                                    |connection_signal| {
+                                        connection_signal.1
+                                    },
+                                )
+                            })
+                            .flatten()
+                            // TODO: is this associative/parallelizable? me thinks no
+                            // NOTE: this is not parallelized
+                            .fold(0, |acc, res| {
+                                (acc >> 1) + (res >> 1)
+                            })
+                    //)
+                })
+                .collect()
+        }
         //
-        // cur_in_connections: current in connections in a buffer
-        //                     including this nodes in connections
-        // node: the node being compared.
-        // pub fn node_ready_comparator(
-        //     &self,
-        //     node: &node,
-        //     cur_in_connections: &Vec<(&connection, u8)>,
-        // ) -> bool {
-        //     // all in_connections for this node
-        //     let in_connections = self.get_in_connections(node.id);
+        //         @DEPRECATED
+        //         check if all connections for a
+        //         node exist in a (connection,signal) buffer
 
-        //     let is_output =
-        //         self.outputs.iter().any(|output| *output == node.id);
-
-        //     (in_connections.len() == cur_in_connections.len())
-        //         && !is_output
-        // // }
+        //         cur_in_connections: current in connections in a buffer
+        //                             including this nodes in connections
+        //         node: the node being compared.
+        //         pub fn node_ready_comparator(
+        //             &self,
+        //             node: &node,
+        //             cur_in_connections: &Vec<(&connection, u8)>,
+        //         ) -> bool {
+        //             // all in_connections for this node
+        //             let in_connections = self.get_in_connections(node.id);
+        // //
+        //             let is_output =
+        //                 self.outputs.iter().any(|output| *output == node.id);
+        // //
+        //             (in_connections.len() == cur_in_connections.len())
+        //                 && !is_output
+        //         // }
     }
 
     // TRAITS //
@@ -1101,11 +1148,11 @@ pub mod psyclones {
             let mut buffer = "".to_string();
 
             self.tensor.iter().for_each(|node| {
-                buffer += &node.lock().unwrap().id.to_string();
+                buffer += &node.read().unwrap().id.to_string();
                 buffer += &format!("->").to_string();
                 buffer += "|";
                 buffer += &node
-                    .lock()
+                    .read()
                     .unwrap()
                     .connections
                     .iter()
@@ -1114,7 +1161,7 @@ pub mod psyclones {
                             .output_node
                             .upgrade()
                             .unwrap()
-                            .lock()
+                            .read()
                             .unwrap()
                             .id
                             .to_string()
