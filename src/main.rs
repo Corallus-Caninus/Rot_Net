@@ -112,7 +112,8 @@ fn main() {
     // println!("adding nodes..");
     for i in 0..1000 {
         rot_net.random_node();
-        rot_net.random_connection(3);
+        // rot_net.random_connection(3);
+        // rot_net.random_connection(3);
     }
 
     // println!("adding connections..");
@@ -138,9 +139,9 @@ fn main() {
         vec![rng.gen::<u8>(), rng.gen::<u8>(), rng.gen::<u8>()];
     let output_signals = rot_net.forward_propagate(signals.clone());
 
-    //timeit!({
-    //    rot_net.forward_propagate(signals.clone());
-    //});
+    timeit!({
+        rot_net.forward_propagate(signals.clone());
+    });
     //NOTE: initial nodeIds are out of order
     println!(
         "forward propagating {:?} returned {:?}",

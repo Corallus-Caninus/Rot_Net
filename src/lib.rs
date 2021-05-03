@@ -443,9 +443,11 @@ pub mod psyclones {
         //       since nodes arent pruned
         output_node: Weak<RwLock<node>>,
         // the ID of this connection
-        // TODO: may use Weak<RwLock<node>> for backprop and resort
-        //       to split_depth processing for similarity
-        innovation: usize,
+        // this is currently used in place of input_node pointers
+        // because it can convey topology mapping and serves the
+        // same operation in forward_propagation
+        // TODO: we are split depth processing for these to alleviate bloat
+        // innovation: usize,
         param: u8,
     }
 
@@ -456,26 +458,29 @@ pub mod psyclones {
         // NOTE: would prefer for this to be an address of a connection vector but is too dynamic
         id: usize,
         // the connections going out from this node
-        connections: Vec<connection>,
-        // the innovation numbers of connections going into this node
-        input_connections: Vec<usize>,
+        connections: Vec<Arc<connection>>,
+        // NOTE: with these we are optimal fast for pointer-graph traversal.
+        //the connections going into this node.
+        //the reference lifetime is tied to the value since an edge
+        // always exists in both vertices.
+        input_connections: Vec<Weak<connection>>,
     }
-    // impl Ord for node<'a> {
+    // impl Ord for node {
     //     fn cmp(&self, other: &Self) -> Ordering {
     //         self.id.cmp(&other.id)
     //     }
     // }
-    // impl PartialOrd for node<'a> {
+    // impl PartialOrd for node {
     //     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
     //         Some(self.cmp(other))
     //     }
     // }
-    // impl PartialEq for node<'a> {
+    // impl PartialEq for node {
     //     fn eq(&self, other: &Self) -> bool {
     //         self.id == other.id
     //     }
     // }
-    // impl Eq for node<'a> {} //Implied by PartialEq
+    // impl Eq for node {} //Implied by PartialEq
 
     /// an Artificial Neural Network represented as a sparse
     /// index format. This data structure supports both DAG
@@ -520,9 +525,6 @@ pub mod psyclones {
         pub outputs: Vec<usize>,
         // the input node id's
         pub inputs: Vec<usize>,
-        // current max_innovation prevents having to
-        // count each time a connection is added *for the low low cost of 1 usize!*
-        pub innovation_counter: usize,
     }
     // METHODS //
     impl rot_net {
@@ -532,7 +534,7 @@ pub mod psyclones {
         ) -> Self {
             let mut rng = rand::thread_rng();
             let mut tensor = vec![];
-            let mut innovation_counter = 0;
+
             let mut output_vector = vec![];
             let mut input_vector = vec![];
 
@@ -547,18 +549,15 @@ pub mod psyclones {
                 };
                 // TODO: ensure this aligns correctly with input node creation
                 // one input connection innovation each
-                for input in 0..inputs {
-                    innovation_counter += 1;
-                    new_node
-                        .input_connections
-                        .push(innovation_counter);
-                }
+                // for input in 0..inputs {
+                //     new_node
+                //         .input_connections
+                //         .push(innovation_counter);
+                // }
                 tensor.push(Arc::new(RwLock::new(new_node)));
                 output_vector.push(output);
             }
 
-            // reset the counter
-            innovation_counter = 0;
             // since we are considering recurrent
             // connections as buffer roll over
             // (not param associated so doesnt bloat)
@@ -567,32 +566,39 @@ pub mod psyclones {
             for input in 0..inputs {
                 println!("initializing with id {}", outputs + input);
                 // TODO: input nodes are wrong
-                let mut new_node = node {
+                let mut new_node = Arc::new(RwLock::new(node {
                     id: input + outputs,
                     connections: vec![],
                     input_connections: vec![],
-                };
-                input_vector.push(input+outputs);
+                }));
+                input_vector.push(input + outputs);
                 for output in 0..outputs {
-                    let new_connection = connection {
+                    let new_connection = Arc::new(connection {
                         output_node: Arc::downgrade(&tensor[output]),
-                        innovation: innovation_counter,
                         param: rng.gen::<u8>(),
-                    };
-                    new_node.connections.push(new_connection);
+                    });
                     println!(
                         "initializing connection for node with id {}",
                         tensor.len()
                     );
-                    innovation_counter += 1;
+                    //TODO: now push to input_connections
+                    tensor[input]
+                        .write()
+                        .unwrap()
+                        .input_connections
+                        .push(Arc::downgrade(&new_connection));
+                    new_node
+                        .write()
+                        .unwrap()
+                        .connections
+                        .push(new_connection);
                 }
-                tensor.push(Arc::new(RwLock::new(new_node)));
+                tensor.push(new_node);
             }
             rot_net {
                 tensor: tensor,
                 inputs: input_vector,
                 outputs: output_vector,
-                innovation_counter: innovation_counter,
             }
         }
         // TODO: dont use lookup by ID (costly since data structure rework)
@@ -644,10 +650,10 @@ pub mod psyclones {
             input_node_id: usize,
             output_node_id: usize,
         ) {
-            println!(
-                "adding connection..{} {}",
-                input_node_id, output_node_id
-            );
+            // println!(
+            //     "adding connection..{} {}",
+            //     input_node_id, output_node_id
+            // );
             let mut rng = rand::thread_rng();
 
             if input_node_id == output_node_id
@@ -660,9 +666,8 @@ pub mod psyclones {
                     .iter()
                     .any(|output| *output == input_node_id)
             {
-                return; // loop
+                return; // loop or intra-extrema connection
             }
-
             let output_node = self.get_node(output_node_id);
 
             // TODO: verify this detects cycles
@@ -683,6 +688,7 @@ pub mod psyclones {
 
             if next.par_iter().any(|node| {
                 let id = node.upgrade().unwrap().read().unwrap().id;
+                // TODO: should only need to look for input node
                 (id == input_node_id) || (id == output_node_id)
             }) {
                 // NOTE: the proposed connection will create a cycle so we silently ignore
@@ -727,19 +733,17 @@ pub mod psyclones {
                 }
             }
 
-            self.innovation_counter += 1;
             // add the connection to the output node
             let mut output_node = self.get_node(output_node_id);
-            let new_connection = connection {
+            let new_connection = Arc::new(connection {
                 output_node: Arc::downgrade(&output_node),
-                innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
-            };
+            });
             output_node
                 .write()
                 .unwrap()
                 .input_connections
-                .push(self.innovation_counter);
+                .push(Arc::downgrade(&new_connection));
             // add the connection to the input node
             let mut input_node = self.get_node(input_node_id);
             input_node
@@ -766,7 +770,6 @@ pub mod psyclones {
                 connections: vec![],
                 input_connections: vec![],
             }));
-            // TODO: check if we should be using weak references in Arc here for leaking
 
             // get the connection's vertices from the graph
             let input_node = self.get_node(node_index);
@@ -778,29 +781,32 @@ pub mod psyclones {
 
             // add the new_node's input connection to the
             // graph
-            self.innovation_counter += 1;
-            let new_input = connection {
+            let new_input_connection = Arc::new(connection {
                 output_node: Arc::downgrade(&new_node),
-                innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
-            };
-            input_node.write().unwrap().connections.push(new_input);
+            });
+            input_node
+                .write()
+                .unwrap()
+                .connections
+                .push(new_input_connection.clone());
             // add the new input_connection to new_node
             new_node
                 .write()
                 .unwrap()
                 .input_connections
-                .push(self.innovation_counter);
+                .push(Arc::downgrade(&new_input_connection));
             // add the new_node's output connection to the
             // graph
-            self.innovation_counter += 1;
-            let new_output = connection {
+            let new_output_connection = Arc::new(connection {
                 output_node: output_node.clone(),
-                innovation: self.innovation_counter,
                 param: rng.gen::<u8>(),
-            };
-            // TODO: does this deadread?
-            new_node.write().unwrap().connections.push(new_output);
+            });
+            new_node
+                .write()
+                .unwrap()
+                .connections
+                .push(new_output_connection.clone());
             // add the new out_connection to output_node
             output_node
                 .upgrade()
@@ -808,7 +814,7 @@ pub mod psyclones {
                 .write()
                 .unwrap()
                 .input_connections
-                .push(self.innovation_counter);
+                .push(Arc::downgrade(&new_output_connection));
 
             self.tensor.push(new_node);
         }
@@ -832,7 +838,7 @@ pub mod psyclones {
                 self.tensor.len(),
             );
         }
-        // TODO: dont use num_inputs here
+        // TODO: dont use num_inputs here use self.inputs
         /// attempt to add a random connection to the network
         pub fn random_connection(&mut self, num_inputs: usize) {
             let mut rng = rand::thread_rng();
@@ -868,20 +874,16 @@ pub mod psyclones {
         // TODO: rework this to a sorting routine that does
         // not need to cycle the network as an
         // infinite iterator while loop
-        // TODO: recurrent connections
-        // TODO: use node groupings to reduce filtering
-        // recalculating and sorting
-        // TODO: unless sorting can be done its worth it to
-        //       add input_node to connections (searching takes
-        //       MUCH longer than memory is consumed, O(n)ish )
+        // TODO: recurrent connections *with determinism*
 
+        // TODO: rewrite for simpler input_connection based forward propagation
         // NOTE: this technically can allow parallel edges.
         //       with recurrence this will allow all graphs to be propagates.
-        // forward propagate the given signals through the
-        // network and return the output node
-        // values. signals are signals arriving at each
-        // input node there should be one signal
-        // per input node.
+        /// forward propagate the given signals through the
+        /// network and return the output node
+        /// values. signals are signals arriving at each
+        /// input node there should be one signal
+        /// per input node.
         pub fn forward_propagate(&self, signals: Vec<u8>) -> Vec<u8> {
             // TODO: assert vector
             // dimensions are appropriate for this
@@ -893,143 +895,183 @@ pub mod psyclones {
             // nodes (ready to broadcast)
             let initialization = self
                 .tensor
-                .iter()
+                .par_iter()
                 .skip(self.outputs.len())
                 .take(signals.len())
                 .zip(signals)
                 .collect::<Vec<(&Arc<RwLock<node>>, u8)>>();
-            println!(
-                "FORWARD_PROP initialized: {:?}\n",
-                initialization
-            );
+            // println!(
+            //     "FORWARD_PROP initialized: {:?}\n",
+            //     initialization
+            // );
             //
             // TODO: rework to have buffer entries be (nodeid, Vec<input_connections, signals>)
             //       stop when all nodeids are output nodes and perform one last sum outside
             //       loop then return. dont overthink it.
             //
             // perform the initial broadcast (without activation)
-            let mut buffer = initialization
-                .iter()
-                // TODO: this is supposed to be output_connection.output_node node node.0.id
-                .map(|node| {
-                    //(node.0, vec![(node.0.id, node.1)])
-                    node.0.read().unwrap().connections.clone().into_iter().map(
-                        move |connection_param| {
-                            (
-                                self.get_node(
-                                    connection_param.output_node.upgrade().unwrap().read().unwrap().id.clone(),
-                                ),
-                                vec![(
-                                    connection_param.clone(),
-                                    weights::weight(node.1, connection_param.param.clone()),
-                                )],
-                            )
-                        },
-                    )
-                })
-                .flatten()
-                // TODO: this is complicated enough to justify a
-                //       data structure or anonymous data structure instead of tuple
-                .collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>();
-            println!("initial broadcast complete:{:?}", buffer);
+            let mut buffer =
+                initialization
+                    .into_iter()
+                    .map(|node| {
+                        node.0
+                            .read()
+                            .unwrap()
+                            .connections
+                            .clone()
+                            .into_iter()
+                            .map(move |connection_param| {
+                                (
+                                    self.get_node(
+                                        connection_param
+                                            .output_node
+                                            .upgrade()
+                                            .unwrap()
+                                            .read()
+                                            .unwrap()
+                                            .id,
+                                    ),
+                                    vec![(
+                                        connection_param.clone(),
+                                        weights::weight(
+                                            node.1,
+                                            connection_param.param,
+                                        ),
+                                    )],
+                                )
+                            })
+                    })
+                    .flatten()
+                    // TODO: this is complicated enough to justify a
+                    //       data structure or anonymous data structure instead of tuple
+                    .collect::<Vec<(
+                        Arc<RwLock<node>>,
+                        Vec<(Arc<connection>, u8)>,
+                    )>>();
+            // println!("initial broadcast complete:{:?}", buffer);
             //
             // TODO: integrate this and above into one bootstrap step
             // resort into node groups
-            buffer = buffer
-                .iter()
-                .group_by(|node| node.0.read().unwrap().id)
-                .into_iter()
-                .map(|(key, group)| {
-                    // collapse into one node
-                    (
+            buffer =
+                buffer
+                    .into_iter()
+                    .group_by(|node| node.0.read().unwrap().id)
+                    .into_iter()
+                    .map(|(key, group)| {
+                        // collapse into one node
+                        (
                         self.get_node(key),
                         group
                             .into_iter()
                             .map(|node| node.1.clone())
                             .flatten()
-                            .collect::<Vec<(connection, u8)>>(),
+                            .collect::<Vec<(Arc<connection>, u8)>>(),
                     )
-                })
-                .collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>();
-            println!(
-                "FORWARD_PROP sorted with buffer: {:?}\n",
-                buffer
-            );
+                    })
+                    .collect::<Vec<(
+                        Arc<RwLock<node>>,
+                        Vec<(Arc<connection>, u8)>,
+                    )>>();
+            // println!(
+            //     "FORWARD_PROP sorted with buffer: {:?}\n",
+            //     buffer
+            // );
             //
             // performs sum-normalize, activation, and next_node weighting per iteration
             // to maximize operations per address indirection and ready_node lookup
-            while !buffer.iter().all(|node| {
-                self.outputs.iter().any(|output| {
+            while !buffer.par_iter().all(|node| {
+                self.outputs.par_iter().any(|output| {
                     node.0.read().unwrap().id == *output
                 })
             }) {
-                //println!("BUFFER: {:?}\n", buffer);
-                //
+                // TODO: remove collections and clones in this part of the loop
+                //       iterate all network parameters by reference here
+                // NEED REFERENCES DUE TO POINTER COMPARISON IN READY_NODE
+
+                println!(
+                    "NODES IN BUFFER: {:?}\n",
+                    buffer
+                        .iter()
+                        .map(|node| node.0.read().unwrap().id)
+                        .collect::<Vec<usize>>()
+                );
+
                 // NOTE: this is actually really good for hoisting from for loop
                 //       iff vec macro initializes allocation here
-                //
-                // let mut ready_nodes = RwLock::new(Vec::new());
-                // let mut halted_nodes = RwLock::new(Vec::new());
-                let mut ready_nodes = Vec::new();
-                let mut halted_nodes = Vec::new();
+                let ready_nodes = RwLock::new(Vec::new());
+                let halted_nodes = RwLock::new(Vec::new());
                 //
                 // check if nodes are ready to propagate
-                // TODO: rework this better now that ready is a local search
-                //       in buffer not tensor
                 // short-circuiting node-local search
-                // println!(
-                //     "{} {:?} {:?}",
-                //     self, self.outputs, self.inputs
-                // );
-                buffer.iter().for_each(|node| {
-                    // println!("NODE: {}", node.0.read().unwrap().id);
-                    //if self.node_ready_comparator(node.0.borrow(), &node.1) {
+                buffer.into_par_iter().for_each(|node| {
                     if node
                         .0
                         .read()
                         .unwrap()
                         .input_connections
                         .par_iter()
+                        // TODO: false positive if no input_connections
                         .all(|input_connection| {
-                            node.1.iter().any(|buffer_connection| {
-                                *input_connection
-                                    == buffer_connection.0.innovation
-                            })
+                            node.1.par_iter().any(
+                                |buffer_connection| {
+                                    Arc::ptr_eq(
+                                        &input_connection
+                                            .upgrade()
+                                            .unwrap(),
+                                        &buffer_connection.0,
+                                    )
+                                },
+                            )
                         })
+                        // TODO: can also be cmp to self.outputs
+                        && node.0.read().unwrap().connections.len()
+                            > 0
                     {
-                        ready_nodes.push(node.to_owned());
+                        ready_nodes
+                            .write()
+                            .unwrap()
+                            .push(node.clone());
                     } else {
-                        halted_nodes.push(node.to_owned());
+                        halted_nodes
+                            .write()
+                            .unwrap()
+                            .push(node.clone());
                     }
                 });
-                // let mut ready_nodes: Vec<(&node, Vec<(&connection, u8)>)> = ready_nodes.read().unwrap().into();
-                // let mut halted_nodes = halted_nodes.read().unwrap().into();
+
+                let mut ready_nodes =
+                    ready_nodes.into_inner().unwrap();
+                let mut halted_nodes =
+                    halted_nodes.into_inner().unwrap();
                 //
                 // println!("FORWARD PROPAGATING WITH READY NODES {:?} AND HALTED NODES {:?}", ready_nodes, halted_nodes);
                 //
                 // propagate ready nodes
-                ready_nodes = ready_nodes.par_iter()
+                let mut ready_nodes = ready_nodes.into_par_iter()
                     // .inspect(|activation| println!("activating: {:?}",activation))
                     .map(|node| {
                         // get the broadcast signal from this node
                         let broadcast_signal =
                         // @DEPRECATED: or justify
                         //activations::cond_rot_act(
-                        // NOTE: this is not parallelized here due to associative property
-                        node.1.iter().fold(0,|res,acc|{
-                            (res >> 1) + (weights::weight(acc.0.param,acc.1) >> 1)
+                        // NOTE: this is not parallelized here due to associative property?
+                        node.1.into_par_iter()
+                        .map(|connection_param| {
+                            weights::weight(connection_param.1, connection_param.0.param)
+                        })
+                        .reduce_with(|a: u8,b: u8|{
+                            (a + b) >> 1
                         });
-                        //);
-                        node.0.read().unwrap().connections.iter().map(|out_connection|{
-                            //(self.get_node(out_connection.output_node.id), vec![(out_connection, broadcast_signal)])
-                            (out_connection.output_node.upgrade().unwrap(), vec![(out_connection.clone(), broadcast_signal)])
-                        }).collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>()
+                        node.0.read().unwrap().connections.par_iter().map(|out_connection|{
+                            (out_connection.output_node.upgrade().unwrap().clone(), vec![(out_connection.clone(), broadcast_signal.unwrap())])
+                        }).collect::<Vec<(Arc<RwLock<node>>, Vec<(Arc<connection>, u8)>)>>()
                     })
                     .flatten()
                     // add halted nodes
                     .chain(halted_nodes.into_par_iter())
-                    .collect::<Vec<(Arc<RwLock<node>>, Vec<(connection, u8)>)>>();
-                ready_nodes.sort_by(|node_a, node_b| {
+                    .collect::<Vec<(Arc<RwLock<node>>, Vec<(Arc<connection>, u8)>)>>();
+
+                ready_nodes.par_sort_by(|node_a, node_b| {
                     Ord::cmp(
                         &node_a.0.read().unwrap().id,
                         &node_b.0.read().unwrap().id,
@@ -1040,11 +1082,12 @@ pub mod psyclones {
                 //      would like to remove clone here so may rework
                 buffer =
                     ready_nodes
-                        .iter()
+                        .into_iter()
                         .group_by(|node| node.0.read().unwrap().id)
                         .into_iter()
                         .map(|(key, group)| {
                             (
+                                // TODO: should have to fetch this..
                                 self.get_node(key),
                                 group
                                     .into_iter()
@@ -1052,18 +1095,19 @@ pub mod psyclones {
                                         group_node.1.clone()
                                     })
                                     .flatten()
-                                    .collect::<Vec<(connection, u8)>>(
+                                    .collect::<Vec<(Arc<connection>, u8)>>(
                                     ),
                             )
                         })
                         .collect::<Vec<(
                             Arc<RwLock<node>>,
-                            Vec<(connection, u8)>,
+                            Vec<(Arc<connection>, u8)>,
                         )>>();
             }
-            //
+
+            // DONE WITH HIDDEN LAYERS
             // now sum-normalize and activate the output vector
-            buffer.sort_by(|node_a, node_b| {
+            buffer.par_sort_by(|node_a, node_b| {
                 Ord::cmp(
                     &node_a.0.read().unwrap().id,
                     &node_b.0.read().unwrap().id,
@@ -1073,55 +1117,85 @@ pub mod psyclones {
                 .iter()
                 .group_by(|node| node.0.read().unwrap().id)
                 .into_iter()
-                .map(|(_key,group)|
-                group.into_iter().collect::<Vec<&(Arc<RwLock<node>>, Vec<(connection,u8)>)>>())
-                .collect::<Vec<Vec<&(Arc<RwLock<node>>,Vec<(connection, u8)>)>>>()
-// 
+                .map(|(_key, group)| {
+                    group.into_iter().collect::<Vec<&(
+                        Arc<RwLock<node>>,
+                        Vec<(Arc<connection>, u8)>,
+                    )>>()
+                })
+                .collect::<Vec<
+                    Vec<&(
+                        Arc<RwLock<node>>,
+                        Vec<(Arc<connection>, u8)>,
+                    )>,
+                >>()
                 .into_par_iter()
                 .map(|group| {
                     //activations::cond_rot_act(
-                        group
-                            .into_iter()
-                            .map(|node| {
-                                node.1.iter().map(
-                                    |connection_signal| {
-                                        connection_signal.1
-                                    },
-                                )
+                    group
+                        .into_iter()
+                        .map(|node| {
+                            node.1.iter().map(|connection_signal| {
+                                connection_signal.1
                             })
-                            .flatten()
-                            // TODO: is this associative/parallelizable? me thinks no
-                            // NOTE: this is not parallelized
-                            .fold(0, |acc, res| {
-                                (acc >> 1) + (res >> 1)
-                            })
-                    //)
+                        })
+                        .flatten()
+                        .par_bridge()
+                        .reduce_with(|a: u8, b: u8| (a + b) >> 1)
+                        .unwrap()
                 })
-                .collect()
+                .collect::<Vec<u8>>()
         }
-        //
-        //         @DEPRECATED
-        //         check if all connections for a
-        //         node exist in a (connection,signal) buffer
 
-        //         cur_in_connections: current in connections in a buffer
-        //                             including this nodes in connections
-        //         node: the node being compared.
-        //         pub fn node_ready_comparator(
-        //             &self,
-        //             node: &node,
-        //             cur_in_connections: &Vec<(&connection, u8)>,
-        //         ) -> bool {
-        //             // all in_connections for this node
-        //             let in_connections = self.get_in_connections(node.id);
-        // //
-        //             let is_output =
-        //                 self.outputs.iter().any(|output| *output == node.id);
-        // //
-        //             (in_connections.len() == cur_in_connections.len())
-        //                 && !is_output
-        //         // }
+        /// Calculates the gradient from an output vector and the true_output vector
+        /// updating the parameters.
+        /// Topology is augmented with point mutations (multiple mutations possible per backprop)
+        /// by setting a distribution given the higher order derivative of the loss function.
+        /// Point mutations means at scale the network can still complexify efficiently given samples.
+        ///     connection_weight: update with normal backpropagation (directly).
+        ///     add_connection: if error is decreasing or zero, increase connection mutation
+        ///                      rate for this connection's input_node to a nearby
+        ///                      (in split_node_tree) low performing node.
+        ///                      (increase this signals usage in nearby approximators)
+        ///                      distance of output_node in split_node_tree increases with mutation rate.
+        ///                      s.t. zero error can connect anywhere in the topology.
+        ///     add_node: if error is increasing or max, increase node mutation rate
+        ///                for this connection.
+        ///                 (add terms to find a better approximation/fit)
+        ///
+        /// this is loosely based on series approximation using polynomials or linear/sigmoidal
+        /// functions where a best fit is incremented atomically with additional rank/terms.
+        pub fn augmenting_gradient_descent(
+            &self,
+            outputs: Vec<u8>,
+            true_outputs: Vec<u8>,
+        ) {
+            // NOTE: with ancestral speciation this should be performant without batching.
+            // calculate the error
+            let initial_differential = true_outputs
+                .into_iter()
+                .zip(outputs)
+                .map(|error| {
+                    // we check distance without pyth. thm.
+                    let mut error_distance = 0;
+                    if error.0 > error.1 {
+                        error_distance = error.0 - error.1;
+                    } else {
+                        error_distance = error.1 - error.0;
+                    }
+                    error_distance
+                })
+                .collect::<Vec<u8>>();
+
+            //begin the backprop through parameter space
+            // TODO: need input_connection addresses in Node
+        }
     }
+
+    // sort the network nodes so forward_propagation can occur
+    // in one cycle by forward_propagating and pushing based on
+    // activation iteration.
+    // pub fn pre_sort()
 
     // TRAITS //
     // NOTE: using iterators one can implement a custom
@@ -1178,105 +1252,6 @@ pub mod psyclones {
     }
 }
 
-// TODO:
-// cycle through the nodes halting if not ready for
-// activation pub fn forward_propagate(){}
-//
-// sort the network nodes so forward_propagation can occur
-// in one cycle by forward_propagating and pushing based on
-// activation iteration.
-// pub fn pre_sort(){}
-//
-//pub fn stochastic_back_propagate(){}
-//backwards propagate through the network changing weights
-// accordingly. TODO: extract this rant to DEV_DOC.md
-//NOTE: this is not SGD. The gradient sets a scalar to a
-// distributions      variance which in turn allows
-// changes to the weight.      This ensures
-// exploration during MCTS (PoM/RoM) while still being
-//      more reasonable than the brute force+combinatorics
-// psuedo ("natural")      gradient of crossover (also
-// not a swarm optimizer so sample      and/or memory
-// (SAR map) efficient). This also allows multiple
-//      point mutations throughout the network at once,
-//      preserving solutions and increasing
-//      terms of approximation where necessary until an
-// information      equillibrium is broken in the
-// topology and the previously      optimal local
-// subtrees in the graph are then underperforming,
-//      allowing informative based complexification
-// (generalization/abstraction). NOTE: This doesnt
-// solve the multi optimization problem of architecture
-// search      in itself. This is more of a sample
-// efficiency solution. multi-optimization      can be
-// solved by directly changing the topology using the
-// gradient      information for
-//      connection weight and taking a higher order
-// derivative with the      gradient for complexification
-// (but still using a scalar      variation to prevent
-// jitter      in sample space causing irreversable
-// complexification      runaway (the bane of NEAT
-// which can lead to compounding errors      in the
-// f(fitness_landscape, complexification) pathing)).
-// NOTE: the above statements lead to the corallaries that:
-//      1. The weights and complexifications must be updated
-//      stochastically but using the gradient. Using the
-// gradient      as a scalar to variation of a
-// mutation distribution may lead to      efficient
-// sampling with robust exploration.      2. The
-// mutation of weights can be performed randomly but
-//         this wastes the information processed in the
-// gradient calculation.         It is hypothesized
-// that the order of mutation/complexification in
-//         the topology is sufficient for robust exploration
-// to the extent         of global minima. Allowing
-// the distribution of         point mutation (not to
-// be confused with PoM data structure)
-//         selection with the gradient to be sufficient for
-// exploration         equivalent to genetic/swarm
-// gradient. 1. calculate back_prop error gradient
-//LOOP UNTIL INPUT NODES:
-//  2. iterate back one layer and for each connection:
-//     3. sample and conditionally perform mutation_weight
-// distribution based on error*variance     4. sample
-// and conditionally perform mutation_connection
-// distribution based on error*(variance d/dx)        node
-// selection also calculated from error*(variance d/dx) of
-// other        weights possibly connecting to
-// high performing nodes (average
-//        input_connection error). what does hebbian
-// plasticity say about this? can use        locality
-// with average error (within same subtree) for
-// fire-together        wire-together (distance-fitness
-// selection metric). If a connection is
-// underperforming look to integrate terms.     5. sample
-// and conditionally perform mutation_node distribution
-// based on error*(1/variance d/dx)        directly on the
-// connection in question. if a connection is performing
-// well add        terms.
-//  6. return
-//  such that mutation_weight_rate >
-// mutation_connection_rate > mutation_node_rate loop can be
-// implemented as BFS that halts a subtree backprop when the
-// gradient is not taken. prefered to traverse the entire
-// tree for simplicity and thoroughness. Sometimes there is
-// a chaotic nature to the system that can be changed from a
-// shallower point in the network (why does the
-// backprop gradient weigh more on the deeper connection
-// weights. This cant possibly be condusive to
-// generalization and hints at a chaotic system seeded from
-// inputs) The sparsity of the chaotic search is what
-// makes ANN robust to high dimension data and
-// functions allowing for generalization (transfer learning)
-// and architecture reuse across domains.
-
-//TODO: trace split_depths tree for innovation assignment
-// by iterating rot_net     and getting
-//     shortest to longest residual connection spans. dont
-// store in data     structure since at
-//     least usize innovation per parameter. This is only
-// useful if not     doing backprop search.
-//
 //  TODO: initialize with limitation parameters as
 // configuration consts.        force usize to be
 // maximum connection per node and maximum network size in
