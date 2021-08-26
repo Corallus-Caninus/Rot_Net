@@ -12,8 +12,8 @@ The goals are:
  representation expression. 
  It is possible to reduce this to 4 bit or even binary but this risks losing 
  expressivity and rewriting the architecture e.g: sigmoid requires some amount 
- of plasticity/representation/domain (for lack of a better term). this also is 
- the word size for most architectures.
+ of plasticity/representation/domain (for lack of a better term-- it would not be as expresive).
+ this also should be limited by the smallest word size for the architecture which is generally x8 bits.
 
 3. *precision*. No loss from mantissa as found in FP networks that have 
  representation loss/redundancy that isn't really modelled with the matrix math
