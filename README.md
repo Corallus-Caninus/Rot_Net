@@ -24,9 +24,10 @@ The goals are:
  few common logic gates/circuits should be able to reproduce or transfer 
  models into an FPGA or ASIC configuration with ease.
 
-5. *energy effeciency* Low level operations should use less pipeline stages and therefore less silicon switching. 
+5. *energy effeciency*. Low level operations should use less pipeline stages and therefore less silicon switching. 
  This network should be memory bottlenecked on all operations to the point parameter compression isnt off the 
- table with certain ALUs/architectures that have pipelines that are partially idling.
+ table with certain ALUs/architectures that have pipelines that are partially idling. while it is possible to use binary and
+ scale out connections, this representation aims to be a good solution for both and therefor a more universal model.
 
 
 config contains the rustc and llvm params for this build.
