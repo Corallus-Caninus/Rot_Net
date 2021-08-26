@@ -22,8 +22,8 @@ The goals are:
 
 4. *digitization*. This representation should be low level enough that a 
  few common logic gates/circuits should be able to reproduce or transfer 
- models into an FPGA or ASIC configuration with ease. While it is possible to use binary and
- scale out connections, this representation aims to be a good solution for both software and 
+ models into an FPGA or ASIC configuration with ease. While it is possible to use binary in hardware 
+ and scale out connections, this representation aims to be a good solution for both software and 
  hardware and therefor a more universal model.
 
 5. *energy effeciency*. Low level operations should use less pipeline stages and therefore less silicon switching. 
