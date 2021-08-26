@@ -17,7 +17,7 @@ The goals are:
 
 3. *precision*. No loss from mantissa as found in floating point network operations that have 
  representation loss/redundancy that isn't really modelled with the matrix math
- (the first (-1, 1) sums have more weight than >1 which leads to bias, strange normalization 
+ (the first (-1, 1) sums have more precision than >1 which leads to bias, strange normalization 
  techniques etc).
 
 4. *digitization*. This representation should be low level enough that a 
