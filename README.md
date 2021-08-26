@@ -15,14 +15,10 @@ The goals are:
  of plasticity/representation/domain (for lack of a better term-- it would not be as expresive).
  this also should be limited by the smallest word size for the architecture which is generally x8 bits.
 
-3. *precision*. No loss from mantissa as found in FP networks that have 
+3. *precision*. No loss from mantissa as found in floating point network operations that have 
  representation loss/redundancy that isn't really modelled with the matrix math
- (the first (-1, 1) sums have more weight than >1). This
- is not trivial with bitwise operations since squashing involves either 
- binning or many operations to create a function that meaningfully maps 32 to 
- 8 bits. This should create consistent representation and 
- is in my current understanding a working flaw in Neural Networks without 
- "quantization".
+ (the first (-1, 1) sums have more weight than >1 which leads to bias, strange normalization 
+ techniques etc).
 
 4. *digitization*. This representation should be low level enough that a 
  few common logic gates/circuits should be able to reproduce or transfer 
